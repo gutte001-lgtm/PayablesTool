@@ -234,10 +234,13 @@ parse failure → store NULL + flag, count in `AuditLog`). QB ids are `nvarchar`
 ### `bill_metadata` (app-owned; auto-created `approval_state='New'` on first sight)
 Not from the warehouse except `ops_number`, parsed from `bill.qb_memo`
 (`PrivateNote`): regex `(?i)OPS-?\s*0*(\d{3,})`, normalized `OPS-<digits>`,
-first match → `ops_number`, all matches → `ops_numbers_all`. (`fact_bill_line`
-also has a `jira_epic_id` column, but it was empty for the OPS-bearing sample
-rows, so it does **not** replace the memo parse — note for cross-check.)
-`app_category` is computed per §4. All other fields per BUILD_PLAN.
+first match → `ops_number`, all matches → `ops_numbers_all`. The memo regex is
+the **primary** `ops_number` source; `fact_bill_line.jira_epic_id` is a
+**cross-check only** (§5), never a replacement. `app_category` is computed per
+§4, with the per-category split stored in `app_category_breakdown` (JSON).
+`has_credit_applied` is a bill-level UI flag (optionally auto-set when
+`dbo.Bill_LinkedTxn` shows a `VendorCredit` linked txn) — **no net-AP math**
+(§5). All other fields per BUILD_PLAN.
 
 ### `vendor_default` keys ← `reporting.dim_vendor`
 `vendor_id` ← `vendor_id`, `vendor_name` ← `vendor_name`, `is_active` ← `is_active`.
@@ -257,7 +260,10 @@ recomputed on sync and on rule changes.
    bill's `bill_line` rows (using the override-applied `gl_account_*` /
    `qb_class_name` from `fact_bill_line`). First rule that matches **any** line
    sets the category. Tie-break across lines: the line with the largest
-   `line_amount_cents` (the bill's dominant spend). [Decision to confirm.]
+   `line_amount_cents` (the bill's dominant spend). **[Decided 2026-05-22.]**
+   The full split is *also* stored in `bill_metadata.app_category_breakdown` —
+   a JSON array of `{category, amount_cents, line_count}` — so the UI can show
+   mixed-bill allocations and Marilyn can tell a clean bill from a split one.
 3. **Vendor default** (`VendorCategoryDefault`) — if no GL rule matched, fall
    back to the vendor's default category.
 4. **`Uncategorized`** — if nothing matched. Surfaced in the UI as requiring
@@ -307,6 +313,14 @@ WHERE Balance > 0;
 Written into the `AuditLog` `sync_run` row as
 `{open_bill_count, open_ap_total_cents, ...}`.
 
+The `sync_run` record also carries per-run **data-quality counts**:
+`date_parse_warnings` (§3) and `ops_jira_mismatch_warnings` — the latter
+incremented when `fact_bill_line.jira_epic_id` is populated **and** disagrees
+with the memo-parsed `ops_number`. Mismatches are surfaced for review, never
+block the sync. `has_credit_applied` is recorded as a bill-level metadata flag
+only; **no net-AP math** is performed (VendorCredit handling deferred until/
+unless a CEO number discrepancy surfaces).
+
 **Caveats to watch when comparing to QB's AP:** (a) `SUM(Balance)` is the gross
 open-bill total — unapplied **vendor credits** (`dbo.VendorCredit`) can make
 QB's net AP lower; (b) only `Balance > 0` bills are counted (credit-balance
@@ -317,11 +331,12 @@ error.
 
 ---
 
-## Open decisions for Phase 1b
-1. **Lines source** — confirm `reporting.fact_bill_line` (recommended) vs raw
-   `dbo.Bill_Line`.
-2. **Multi-line category tie-break** — largest-line-amount wins (proposed) vs
-   first-line vs a header-level rule.
-3. **`jira_epic_id`** — ignore (memo regex only) vs use as a cross-check.
-4. **VendorCredit** — fold `has_credit_applied` / net-AP into the tie-out now,
-   or defer.
+## Decisions (resolved 2026-05-22)
+1. **Lines source** — `reporting.fact_bill_line` ✅. Joe will relay if his boss
+   warns of future column renames; proceeding assuming a stable interface.
+2. **Multi-line tie-break** — largest-line-amount wins for `app_category`,
+   **plus** store `app_category_breakdown` JSON for split visibility ✅.
+3. **`jira_epic_id`** — cross-check only; memo regex stays primary; mismatches
+   counted to `AuditLog` per run ✅.
+4. **VendorCredit** — deferred; ship gross `SUM(Balance)` tie-out; add
+   `has_credit_applied` UI flag, no net-AP math ✅.
