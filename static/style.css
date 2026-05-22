@@ -91,3 +91,10 @@ ul.log { list-style: none; padding: 0; margin: 10px 0; }
 ul.log li { border-bottom: 1px solid var(--line); padding: 7px 0; font-size: 14px; }
 ul.log li.done { color: var(--muted); text-decoration: line-through; }
 ul.log .meta { color: var(--muted); font-size: 12px; }
+ul.log li.reject-note { background: #fdf3f3; border-left: 3px solid #c0392b; padding-left: 8px; }
+.detail-head .actions { display: flex; align-items: center; gap: 10px; }
+.detail-head .actions form { margin: 0; }
+.detail-head .actions button { width: auto; margin: 0; padding: 7px 12px; }
+.rejectform { display: none; margin: 10px 0; }
+.rejectform textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.link-btn.danger { color: #c0392b; font-size: 14px; }

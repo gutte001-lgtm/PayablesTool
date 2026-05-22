@@ -15,6 +15,9 @@
       &middot; <a href="{{ url_for('admin.sync_status') }}">Warehouse sync</a>
       &middot; <a href="{{ url_for('admin.rules') }}">Categorization rules</a>
     {% endif %}
+    {% if current_user.has_role('cfo') %}
+      &middot; <a href="{{ url_for('bills.inbox_cfo') }}">Inbox (CFO)</a>
+    {% endif %}
     &middot; <a href="{{ url_for('health') }}">Health (JSON)</a>
   </p>
   <p class="note">Pay-run builder and exports arrive in later phases.</p>
