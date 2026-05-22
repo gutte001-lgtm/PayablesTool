@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local SQLite app database (regenerate via init_db.py)
+payables.db
+payables.db-journal
+payables.db-wal
+payables.db-shm
+
+# Secrets — never commit
+.env
+
+# Runtime-generated exports (the workbooks the app produces)
+exports/*
+!exports/.gitkeep
+
+# Editor / tooling cruft
+.claude/
+*.bak
+*.bak.*
+
+# Excel files are ignored by default to avoid committing data dumps,
+# EXCEPT the canonical sample the build plan references.
+*.xlsx
+!samples/*.xlsx
