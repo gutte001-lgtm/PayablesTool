@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ title or 'Bills' }} &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
+{% macro sortlink(col, label) %}
+  {% set ndir = 'desc' if (sort==col and dir=='asc') else 'asc' %}
+  <a href="{{ url_for(endpoint, sort=col, dir=ndir, **fparams) }}">{{ label }}{% if sort==col %} {{ '▲' if dir=='asc' else '▼' }}{% endif %}</a>
+{% endmacro %}
+{% block content %}
+<div class="card">
+  <h1>{{ title or 'Bills' }}</h1>
+  {% if locked.approval_state %}<p class="note">Showing only bills at
+     <code>{{ locked.approval_state }}</code> (your queue).</p>{% endif %}
+
+  <div class="kpis">
+    <div class="kpi"><span>Total open</span><b>{{ money(kpis.total_cents) }}</b><em>{{ kpis.total_n }} bills</em></div>
+    <div class="kpi"><span>Current (due now)</span><b>{{ money(kpis.current_cents) }}</b><em>{{ kpis.current_n }} bills</em></div>
+    <div class="kpi"><span>Real payable</span><b>{{ money(kpis.real_cents) }}</b><em>{{ kpis.real_n }} bills</em></div>
+  </div>
+
+  <form method="get" action="{{ url_for(endpoint) }}" class="filters">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <input name="q" value="{{ state.q }}" placeholder="search vendor / bill # / OPS / memo">
+    {% if not locked.approval_state %}
+    <select name="approval_state">
+      <option value="">— state —</option>
+      {% for s in ['New','AP_Reviewed','Controller_Reviewed'] %}
+      <option value="{{ s }}" {{ 'selected' if state.approval_state==s }}>{{ s }}</option>{% endfor %}
+    </select>
+    {% endif %}
+    <select name="status">
+      {% for s in ['open','paid','all'] %}
+      <option value="{{ s }}" {{ 'selected' if state.status==s }}>{{ s }}</option>{% endfor %}
+    </select>
+    <select name="classification">
+      <option value="">— class —</option>
+      <option value="unset" {{ 'selected' if state.classification=='unset' }}>(unset)</option>
+      {% for c in classifications %}
+      <option value="{{ c }}" {{ 'selected' if state.classification==c }}>{{ c }}</option>{% endfor %}
+    </select>
+    <input name="app_category" value="{{ state.app_category }}" placeholder="category">
+    <select name="due">
+      <option value="">— due —</option>
+      {% for d,l in [('overdue','Overdue'),('current','Current'),('notdue','Not Due')] %}
+      <option value="{{ d }}" {{ 'selected' if state.due==d }}>{{ l }}</option>{% endfor %}
+    </select>
+    <label class="chk"><input type="checkbox" name="rush" value="1" {{ 'checked' if state.rush }}> rush</label>
+    <label class="chk"><input type="checkbox" name="future" value="1" {{ 'checked' if state.future }}> future-dated</label>
+    <label class="chk"><input type="checkbox" name="uncat" value="1" {{ 'checked' if state.uncat }}> uncategorized</label>
+    <button type="submit">Filter</button>
+    <a href="{{ url_for(endpoint) }}" class="clear">clear</a>
+  </form>
+
+  <p class="note">{{ total }} bill(s){% if pages>1 %} &middot; page {{ page }} of {{ pages }}{% endif %}</p>
+
+  <form method="post" action="{{ url_for('bills.bulk_classify') }}" id="bulkform">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <table class="grid">
+      <tr>
+        {% if can_edit %}<th><input type="checkbox" id="checkall"></th>{% endif %}
+        <th>{{ sortlink('vendor','Vendor') }}</th>
+        <th>{{ sortlink('bill_number','Bill #') }}</th>
+        <th>{{ sortlink('bill_date','Date') }}</th>
+        <th>{{ sortlink('due_date','Due') }}</th>
+        <th style="text-align:right">{{ sortlink('amount','Amount') }}</th>
+        <th style="text-align:right">{{ sortlink('open_balance','Open') }}</th>
+        <th>{{ sortlink('app_category','Category') }}</th>
+        <th>Class</th>
+        <th>{{ sortlink('approval_state','State') }}</th>
+        <th>Due status</th>
+        <th>OPS</th>
+        <th>Flags</th>
+      </tr>
+      {% for b in bills %}
+      <tr class="{{ 'row-overdue' if b.due_status=='Overdue' }}">
+        {% if can_edit %}<td><input type="checkbox" name="bill_ids" value="{{ b.qb_bill_id }}" class="rowchk"></td>{% endif %}
+        <td><a href="{{ url_for('bills.detail', bill_id=b.qb_bill_id) }}">{{ b.vendor or '—' }}</a></td>
+        <td>{{ b.bill_number or '—' }}</td>
+        <td>{{ b.bill_date or '—' }}</td>
+        <td>{{ b.due_date or '—' }}</td>
+        <td style="text-align:right">{{ money(b.amount_cents) }}</td>
+        <td style="text-align:right">{{ money(b.open_balance_cents) }}</td>
+        <td>{{ b.app_category or '—' }}{% if b.split %} <span class="badge" title="multiple categories">split</span>{% endif %}</td>
+        <td>{{ b.classification or '—' }}</td>
+        <td>{{ b.approval_state or '—' }}</td>
+        <td>{{ b.due_status }}</td>
+        <td>{% if b.ops_number and jira_base %}<a href="{{ jira_base }}/{{ b.ops_number }}" target="_blank" rel="noopener">{{ b.ops_number }}</a>{% else %}{{ b.ops_number or '—' }}{% endif %}</td>
+        <td>{% if b.rush_flag %}<span class="badge rush">⚡</span>{% endif %}{% if b.ok_for_ceo %}<span class="badge ceo">CEO</span>{% endif %}{% if b.app_category=='Uncategorized' %}<span class="badge warn">?</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="13">No bills match.</td></tr>
+      {% endfor %}
+    </table>
+
+    {% if can_edit %}
+    <div class="bulkbar">
+      Bulk classify selected as
+      <select name="classification" id="bulkclass">
+        <option value="">— pick —</option>
+        {% for c in classifications %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+      </select>
+      <button type="button" id="bulkapply">Apply to selected</button>
+    </div>
+    {% endif %}
+  </form>
+
+  {% if pages>1 %}
+  <div class="pager">
+    {% if page>1 %}<a href="{{ url_for(endpoint, page=page-1, sort=sort, dir=dir, **fparams) }}">&laquo; prev</a>{% endif %}
+    <span>page {{ page }} / {{ pages }}</span>
+    {% if page<pages %}<a href="{{ url_for(endpoint, page=page+1, sort=sort, dir=dir, **fparams) }}">next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if can_edit %}
+<div id="modal" class="modal-back" style="display:none;">
+  <div class="modal">
+    <p id="modaltext"></p>
+    <button type="button" id="modalcancel">Cancel</button>
+    <button type="button" id="modalok" class="primary">Confirm</button>
+  </div>
+</div>
+<script>
+(function(){
+  var all=document.getElementById('checkall');
+  if(all){all.addEventListener('change',function(){
+    document.querySelectorAll('.rowchk').forEach(function(c){c.checked=all.checked;});});}
+  var apply=document.getElementById('bulkapply');
+  if(apply){apply.addEventListener('click',function(){
+    var n=document.querySelectorAll('.rowchk:checked').length;
+    var cls=document.getElementById('bulkclass').value;
+    if(!cls){alert('Pick a classification.');return;}
+    if(!n){alert('Select at least one bill.');return;}
+    document.getElementById('modaltext').textContent='Classify '+n+' bill(s) as "'+cls+'"?';
+    document.getElementById('modal').style.display='flex';});}
+  var cancel=document.getElementById('modalcancel');
+  if(cancel){cancel.addEventListener('click',function(){document.getElementById('modal').style.display='none';});}
+  var ok=document.getElementById('modalok');
+  if(ok){ok.addEventListener('click',function(){document.getElementById('bulkform').submit();});}
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -27,7 +27,7 @@ import json
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 import warehouse
@@ -298,6 +298,65 @@ def _batches(seq, n):
 
 
 # ----------------------------------------------------------------------
+# Local KPI computation (Total / Current / Real-payable open AP)
+# ----------------------------------------------------------------------
+
+def compute_kpis(conn, extra_where="", extra_params=()):
+    """Open-AP KPIs from the local mirror, computed live.
+
+      total    = open bills (open_balance_cents > 0)
+      current  = total AND bill_date <= today  (ties to QB's AP aging)
+      real     = current AND classification IN ('Real', NULL)
+
+    extra_where/extra_params let /bills scope the KPI bar to the active filter
+    (the caller passes the non-status filters; open is always enforced here).
+    Returns {total_cents,total_n, current_cents,current_n, real_cents,real_n}.
+    """
+    today = date.today().isoformat()
+    where = "b.open_balance_cents > 0"
+    if extra_where:
+        where += " AND " + extra_where
+    cur_pred = "b.bill_date IS NOT NULL AND b.bill_date <= ?"
+    real_pred = cur_pred + " AND (m.classification='Real' OR m.classification IS NULL)"
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*),
+               COALESCE(SUM(b.open_balance_cents),0),
+               COUNT(CASE WHEN {cur_pred} THEN 1 END),
+               COALESCE(SUM(CASE WHEN {cur_pred} THEN b.open_balance_cents ELSE 0 END),0),
+               COUNT(CASE WHEN {real_pred} THEN 1 END),
+               COALESCE(SUM(CASE WHEN {real_pred} THEN b.open_balance_cents ELSE 0 END),0)
+        FROM bill b LEFT JOIN bill_metadata m ON m.qb_bill_id = b.qb_bill_id
+        WHERE {where}
+        """,
+        (today, today, today, today, *extra_params),
+    ).fetchone()
+    return {"total_n": row[0], "total_cents": row[1],
+            "current_n": row[2], "current_cents": row[3],
+            "real_n": row[4], "real_cents": row[5]}
+
+
+def recompute_for_bill(conn, bill_id):
+    """Recompute one bill's app_category (used after a manual-override change).
+    Respects the manual override. Returns (category, source)."""
+    rules = _load_rules(conn)
+    vendor_defaults = _load_vendor_defaults(conn)
+    b = conn.execute(
+        "SELECT b.vendor_ref, m.app_category_manual FROM bill b "
+        "JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id WHERE b.qb_bill_id=?",
+        (bill_id,)).fetchone()
+    if not b:
+        return None, None
+    lines = [dict(r) for r in conn.execute(
+        "SELECT line_amount_cents, gl_account_number, gl_account_name, "
+        "qb_class_name FROM bill_line WHERE qb_bill_id=?", (bill_id,))]
+    cat, src, breakdown = compute_app_category(
+        lines, rules, vendor_defaults.get(b["vendor_ref"]), b["app_category_manual"])
+    _store_category(conn, bill_id, cat, src, breakdown, _now_iso())
+    return cat, src
+
+
+# ----------------------------------------------------------------------
 # Local writes
 # ----------------------------------------------------------------------
 
@@ -532,6 +591,12 @@ def run_sync(trigger="scheduled", user_id=None):
         cnt, total_cents = ap_tie_out(cur)
         counts["open_bill_count"] = cnt
         counts["open_ap_total_cents"] = total_cents
+        # local KPI split (Current ties to QB aging; Real strips prepay/refund)
+        k = compute_kpis(conn)
+        counts["open_ap_current_cents"] = k["current_cents"]
+        counts["open_ap_current_count"] = k["current_n"]
+        counts["open_ap_real_cents"] = k["real_cents"]
+        counts["open_ap_real_count"] = k["real_n"]
 
         counts["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
         counts["trigger"] = trigger
