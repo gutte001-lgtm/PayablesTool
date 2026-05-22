@@ -26,7 +26,7 @@ See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the full spec and phase plan, and
   If `ODBC Driver 18 for SQL Server` is **not** in the list, install it:
 
   ```powershell
-  winget install Microsoft.ODBCDriver18ForSQLServer
+  winget install Microsoft.msodbcsql.18
   ```
 
   (or download from Microsoft:

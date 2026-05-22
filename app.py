@@ -8,8 +8,9 @@ connectivity. APScheduler is initialized but registers no jobs yet -- the
 """
 
 import os
+from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from flask import Flask, jsonify, redirect, render_template, url_for
 from flask_login import current_user, login_required
 from flask_wtf import CSRFProtect
@@ -18,14 +19,19 @@ import db
 from auth import init_auth
 from warehouse import health_check
 
-load_dotenv()
+# Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
+# is the same pattern warehouse.py uses, and it avoids a real bug: an empty
+# or stale shell variable (e.g. SECRET_KEY= left in a PowerShell session)
+# would otherwise win over the .env value, because load_dotenv() does not
+# override variables already present in the environment.
+_ENV = dotenv_values(Path(__file__).resolve().parent / ".env")
 
 app = Flask(__name__)
 
-_secret = os.environ.get("SECRET_KEY")
+_secret = _ENV.get("SECRET_KEY")
 if not _secret:
     raise RuntimeError(
-        "SECRET_KEY is not set. Copy .env.example to .env and set it "
+        "SECRET_KEY is not set in .env. Copy .env.example to .env and set it "
         "(python -c \"import secrets; print(secrets.token_urlsafe(48))\")."
     )
 app.config["SECRET_KEY"] = _secret

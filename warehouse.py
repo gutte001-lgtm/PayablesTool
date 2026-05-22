@@ -114,7 +114,7 @@ def pick_driver() -> str:
     raise WarehouseDriverError(
         "Microsoft ODBC Driver 18 for SQL Server is not installed "
         f"(found: {sorted(d for d in installed if 'SQL Server' in d) or 'none'}). "
-        "Install it with:  winget install Microsoft.ODBCDriver18ForSQLServer  "
+        "Install it with:  winget install Microsoft.msodbcsql.18  "
         "or download from https://learn.microsoft.com/sql/connect/odbc/"
         "download-odbc-driver-for-sql-server"
     )
