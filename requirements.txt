@@ -1,0 +1,10 @@
+# PayablesTool — Python 3.12
+# Pins follow CloseTool conventions (openpyxl pinned to the same version).
+flask>=3.0
+flask-login>=0.6
+flask-wtf>=1.2
+python-dotenv>=1.0
+apscheduler>=3.10
+openpyxl==3.1.2
+pyodbc>=5.0
+Werkzeug>=3.0
