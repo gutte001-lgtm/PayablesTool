@@ -16,6 +16,7 @@ from flask_login import current_user, login_required
 from flask_wtf import CSRFProtect
 
 import db
+from admin import init_admin
 from auth import init_auth
 from warehouse import health_check
 
@@ -41,6 +42,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 csrf = CSRFProtect(app)
 db.init_app(app)
 init_auth(app)
+init_admin(app)
 
 
 @app.route("/")
@@ -73,13 +75,20 @@ def health():
 
 
 def start_scheduler() -> None:
-    """Initialize APScheduler. No jobs in Phase 0 -- the 15-min warehouse
-    sync is registered here in Phase 1. Guarded against the Flask reloader
-    starting it twice."""
+    """Start APScheduler with the 15-minute bill sync. coalesce + max_instances
+    keep missed/overlapping runs from stacking; the first run fires a few
+    seconds after startup so a fresh deploy populates immediately. Guarded
+    against the Flask reloader starting it twice."""
+    from datetime import datetime, timedelta
     from apscheduler.schedulers.background import BackgroundScheduler
+    import sync
 
     scheduler = BackgroundScheduler(daemon=True)
-    # Phase 1: scheduler.add_job(sync_bills, "interval", minutes=15, id="bill_sync")
+    scheduler.add_job(
+        sync.run_sync, "interval", minutes=15, id="bill_sync",
+        coalesce=True, max_instances=1, misfire_grace_time=300,
+        next_run_time=datetime.now() + timedelta(seconds=5),
+    )
     scheduler.start()
     app.config["SCHEDULER"] = scheduler
 

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Categorization rules &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Categorization rules</h1>
+  <p class="note">Order: largest-amount GL+Class-matched line wins &rarr; vendor
+     default &rarr; Uncategorized. Currently
+     <strong>{{ uncat.n or 0 }}</strong> bills are Uncategorized.</p>
+  {% if can_edit %}
+  <form method="post" action="{{ url_for('admin.rules_rerun') }}" style="margin-bottom:16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Re-run rules across all bills</button>
+  </form>
+  {% else %}
+  <p class="note">You have read-only access; only the controller can edit rules.</p>
+  {% endif %}
+
+  <h2>GL / Class rules</h2>
+  <table class="grid">
+    <tr><th>Pri</th><th>Match type</th><th>Match value</th><th>Category</th>
+        <th>Active</th>{% if can_edit %}<th></th>{% endif %}</tr>
+    {% for r in gl_rules %}
+    <tr>
+      <td>{{ r.priority }}</td><td><code>{{ r.match_type }}</code></td>
+      <td>{{ r.match_value }}</td><td>{{ r.target_category }}</td>
+      <td>{{ 'yes' if r.active else 'no' }}</td>
+      {% if can_edit %}
+      <td>
+        <form method="post" action="{{ url_for('admin.rules_toggle', rule_id=r.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-btn">{{ 'disable' if r.active else 'enable' }}</button>
+        </form>
+        <form method="post" action="{{ url_for('admin.rules_delete', rule_id=r.id) }}" style="display:inline;"
+              onsubmit="return confirm('Delete this rule?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-btn danger">delete</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 6 if can_edit else 5 }}">No rules yet — everything is Uncategorized.</td></tr>
+    {% endfor %}
+  </table>
+
+  {% if can_edit %}
+  <h3>Add rule</h3>
+  <form method="post" action="{{ url_for('admin.rules_add') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="match_type">
+      <option value="gl_account_number">gl_account_number</option>
+      <option value="gl_account_name_like">gl_account_name_like (% wildcards)</option>
+      <option value="class_name">class_name</option>
+      <option value="gl_and_class">gl_and_class (acct||class)</option>
+    </select>
+    <input name="match_value" placeholder="match value (e.g. 56100 or %COGS%)" required>
+    <input name="target_category" placeholder="category" required>
+    <input name="priority" type="number" value="100" style="width:80px;" title="priority (lower first)">
+    <button type="submit">Add rule</button>
+  </form>
+  {% endif %}
+
+  <h2>Vendor default categories</h2>
+  <table class="grid">
+    <tr><th>Vendor id</th><th>Vendor</th><th>Default category</th>
+        <th>Active</th>{% if can_edit %}<th></th>{% endif %}</tr>
+    {% for v in vendor_defaults %}
+    <tr>
+      <td>{{ v.vendor_id }}</td><td>{{ v.vendor_name or '—' }}</td>
+      <td>{{ v.default_category }}</td><td>{{ 'yes' if v.active else 'no' }}</td>
+      {% if can_edit %}
+      <td>
+        <form method="post" action="{{ url_for('admin.vendor_default_delete', vendor_id=v.vendor_id) }}"
+              style="display:inline;" onsubmit="return confirm('Remove this vendor default?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-btn danger">delete</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 5 if can_edit else 4 }}">No vendor defaults yet.</td></tr>
+    {% endfor %}
+  </table>
+
+  {% if can_edit %}
+  <h3>Add vendor default</h3>
+  <form method="post" action="{{ url_for('admin.vendor_default_add') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="vendor_id" placeholder="vendor id (QB VendorRefId)" required>
+    <input name="vendor_name" placeholder="vendor name (optional)">
+    <input name="default_category" placeholder="default category" required>
+    <button type="submit">Add default</button>
+  </form>
+  {% endif %}
+
+  <h2>GL accounts seen on synced bills (rule-authoring helper)</h2>
+  <p class="note">Top accounts by line count across stored bills — target your
+     rules at what actually appears.</p>
+  <table class="grid">
+    <tr><th>GL account name</th><th>Lines</th></tr>
+    {% for c in coverage %}
+    <tr><td>{{ c.gl_account_name }}</td><td>{{ c.line_count }}</td></tr>
+    {% else %}
+    <tr><td colspan="2">No lines synced yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
