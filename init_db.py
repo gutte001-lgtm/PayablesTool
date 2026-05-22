@@ -7,19 +7,24 @@ Phase 0 schema is just the users table. Later phases add their own tables
 (Bill, BillMetadata, PayRun, AuditLog, ...) following the same
 CREATE TABLE IF NOT EXISTS + idempotent-seed pattern.
 
-Seeding refuses to run without SEED_DEFAULT_PASSWORD set in the environment
-(.env) -- it never invents a password. The three active accounts share that
-password and are flagged must_change_password. The CEO is seeded inactive
-(no login in v1) per BUILD_PLAN.
+Seeding refuses to run without SEED_DEFAULT_PASSWORD set in .env -- it never
+invents a password. The three active accounts share that password and are
+flagged must_change_password. The CEO is seeded inactive (no login in v1)
+per BUILD_PLAN.
 """
 
-import os
 import sys
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from werkzeug.security import generate_password_hash
 
 from db import DB_PATH, _connect
+
+# Read .env DIRECTLY from the file rather than load_dotenv() + os.environ.
+# load_dotenv() does not override variables already present in the shell, so
+# an empty/stale SEED_DEFAULT_PASSWORD= leaked into a PowerShell session would
+# silently win over the .env value. dotenv_values reads the file itself.
+ENV_PATH = DB_PATH.parent / ".env"
 
 # (username, name, email, role, active)
 SEED_USERS = [
@@ -54,10 +59,10 @@ def create_schema(conn) -> None:
 def seed_users(conn) -> list:
     """Insert any missing seed users. Returns the list of usernames created
     this run (empty if all already existed)."""
-    default_pw = os.environ.get("SEED_DEFAULT_PASSWORD")
+    default_pw = dotenv_values(ENV_PATH).get("SEED_DEFAULT_PASSWORD")
     if not default_pw:
         sys.exit(
-            "ERROR: SEED_DEFAULT_PASSWORD is not set. Set it in .env "
+            f"ERROR: SEED_DEFAULT_PASSWORD is not set in {ENV_PATH}. Set it "
             "(see .env.example) before seeding -- init_db.py never invents "
             "a password."
         )
@@ -87,7 +92,6 @@ def seed_users(conn) -> list:
 
 
 def init() -> None:
-    load_dotenv()
     conn = _connect()
     try:
         create_schema(conn)

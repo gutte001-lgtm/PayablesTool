@@ -91,3 +91,13 @@ The warehouse firewall (`quickbooks-sq1`) is whitelisted to Joe's box only.
    allowlist, and may lack the `ODBC Driver 18` install. The warehouse leg of
    `/health` will report `ok:false` here. That is expected. Build + mock with
    fixtures; hand the live warehouse-OK confirmation to Joe.
+
+## 8. OneDrive caveat (Windows)
+
+This repo lives under a OneDrive-synced path. OneDrive's file locking
+intermittently interferes with branch operations — `git checkout`,
+`git merge`, and `git branch -d` can fail or hang with "Deletion of
+directory failed" prompts while OneDrive holds a handle on files being
+moved. **Pause OneDrive sync before branch operations** (OneDrive tray icon
+→ Pause syncing), then resume after. There is no code fix; this is a known
+environment gotcha.
