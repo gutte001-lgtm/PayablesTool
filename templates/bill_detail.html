@@ -7,16 +7,35 @@
      &middot; <a href="{{ url_for('bills.inbox') }}">Inbox</a></p>
   <div class="detail-head">
     <h1>{{ bill.vendor or '—' }}</h1>
-    <div>
+    <div class="actions">
       <span class="badge state">{{ meta.approval_state if meta else 'New' }}</span>
       {% if next_state %}
-      <form method="post" action="{{ url_for('bills.review', bill_id=bill.qb_bill_id) }}" style="display:inline;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit">Mark {{ next_state.replace('_',' ') }}</button>
-      </form>
+        {% if missing_required %}
+        <span class="note">To mark {{ next_state.replace('_',' ') }}: fill {{ missing_required|join(', ') }}.</span>
+        {% else %}
+        <form method="post" action="{{ url_for('bills.approve', bill_id=bill.qb_bill_id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">Mark {{ next_state.replace('_',' ') }}</button>
+        </form>
+        {% endif %}
+      {% endif %}
+      {% if can_reject %}
+      <button type="button" id="showreject">Reject…</button>
       {% endif %}
     </div>
   </div>
+  {% if can_reject %}
+  <form method="post" action="{{ url_for('bills.reject', bill_id=bill.qb_bill_id) }}" id="rejectform" class="rejectform">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea name="reason" rows="2" required
+              placeholder="Reason (required) — bounces this bill back to New as an append-only note"></textarea>
+    <button type="submit" class="link-btn danger">Reject to New</button>
+  </form>
+  <script>
+    (function(){var b=document.getElementById('showreject'),f=document.getElementById('rejectform');
+     if(b){b.addEventListener('click',function(){f.style.display=(f.style.display==='block'?'none':'block');});}})();
+  </script>
+  {% endif %}
 
   <!-- Region 1: read-only QB facts -->
   <h2>From QuickBooks (read-only)</h2>
@@ -93,7 +112,7 @@
       <label class="chk"><input type="checkbox" name="rush_flag" value="1" {{ 'checked' if meta.rush_flag }}> Rush</label>
       <label class="chk"><input type="checkbox" name="partial_payment_flag" value="1" {{ 'checked' if meta.partial_payment_flag }}> Partial payment</label>
     </div>
-    <p class="note">Refund-Visibility and Prepayment-Deposit force “OK for CEO” off.</p>
+    <p class="note">Refund-Visibility and Prepayment-Deposit force “OK for CEO” off. Required before AP review: classification, approver, channel, approval date.</p>
     <button type="submit">Save changes</button>
   </form>
   {% else %}
@@ -111,7 +130,8 @@
       </form>
       <ul class="log">
         {% for n in notes %}
-        <li><span class="meta">{{ n.created_at }} &middot; {{ n.author or 'system' }}</span><br>{{ n.body }}</li>
+        {% set is_rej = n.body.startswith(reject_prefix) %}
+        <li class="{{ 'reject-note' if is_rej }}"><span class="meta">{{ n.created_at }} &middot; {{ n.author or 'system' }}</span>{% if is_rej %} <span class="badge warn">rejection</span>{% endif %}<br>{{ n.body }}</li>
         {% else %}<li class="note">No notes yet.</li>{% endfor %}
       </ul>
     </div>

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}CFO Inbox &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>CFO Inbox</h1>
+  <p class="note">The CFO inbox shows <strong>pay runs submitted to the CFO</strong>
+     for approval. Pay runs arrive in <strong>Phase 4</strong> — there's nothing
+     here yet.</p>
+  <p><a href="{{ url_for('bills.list_bills') }}">Browse all bills &raquo;</a></p>
+</div>
+{% endblock %}

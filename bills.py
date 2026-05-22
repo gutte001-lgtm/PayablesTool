@@ -2,16 +2,22 @@
 bills.py -- Phase 2 bill list + detail UI (where Marilyn lives).
 
   /bills                 filterable/searchable/sortable/paginated list + KPI bar
-  /inbox                 role-scoped queue (ap_clerk: New; controller: AP_Reviewed)
+  /inbox                 role dispatcher -> controller queue or ap_clerk New queue
+  /inbox/controller      AP_Reviewed queue (controller)
+  /inbox/cfo             stub (pay-run CFO queue arrives in Phase 4)
   /bills/<id>            detail: read-only QB facts + GL lines/breakdown,
                          editable metadata (one Save), notes, todos, audit panel
   POST .../metadata      save metadata (ap_clerk, controller); audited
-  POST .../review        forward transition New->AP_Reviewed->Controller_Reviewed
+  POST .../approve       forward transition New->AP_Reviewed->Controller_Reviewed
+                         (New->AP_Reviewed gated on required metadata fields)
+  POST .../reject        controller bounces AP_Reviewed -> New with required
+                         reason (stored as a Note + audit)
   POST .../notes         add append-only note (any logged-in)
   POST .../todos[/<t>/complete]  todo add / complete (ap_clerk, controller)
   POST /bills/bulk-classify      set classification on many bills at once
 
-Only the FORWARD transitions are here; rejections/CFO actions are Phase 3.
+Phase 3 = the BILL approval state machine (forward + reject-to-New). The
+pay-run state machine + CFO actions are Phase 4.
 See PHASE_2_DESIGN_NOTES.md for the workflow these screens must match.
 """
 
@@ -33,6 +39,10 @@ CLASSIFICATIONS = ("Real", "Refund-Visibility", "Prepayment-Deposit", "Other")
 CEO_EXCLUDED = ("Refund-Visibility", "Prepayment-Deposit")
 CHANNELS = ("Pur Board", "MS List", "NSPO", "Email", "Other")
 METHODS = ("Check", "Wire", "Credit Card", "ACH")
+# Fields an ap_clerk must fill before New -> AP_Reviewed (key, human label).
+REQUIRED_FOR_AP = (("classification", "classification"), ("approver_name", "approver"),
+                   ("approval_channel", "approval channel"), ("approval_date", "approval date"))
+REJECT_NOTE_PREFIX = "⮌ Rejected: "
 SORTS = {  # ?sort= -> SQL column
     "vendor": "b.vendor", "bill_number": "b.bill_number", "bill_date": "b.bill_date",
     "due_date": "b.due_date", "amount": "b.amount_cents",
@@ -202,19 +212,37 @@ def list_bills():
 @bp.route("/inbox")
 @login_required
 def inbox():
-    # role-scoped queue: ap_clerk -> New, controller -> AP_Reviewed
+    """Role dispatcher: controller -> their AP_Reviewed queue; ap_clerk -> their
+    New queue. Keeps the Phase 2 nav link working."""
     if current_user.has_role("controller"):
-        state = "AP_Reviewed"
-    elif current_user.has_role("ap_clerk"):
-        state = "New"
-    else:
-        flash("Inbox is for AP clerks and the controller.", "error")
-        return redirect(url_for("bills.list_bills"))
+        return redirect(url_for("bills.inbox_controller", **request.args.to_dict(flat=True)))
+    if current_user.has_role("ap_clerk"):
+        args = request.args.to_dict()
+        args["approval_state"] = "New"
+        args["status"] = args.get("status", "open")
+        return _render_list(args, title="Inbox — New (your queue)",
+                            base_endpoint="bills.inbox", locked={"approval_state": "New"})
+    flash("Inbox is for AP clerks and the controller.", "error")
+    return redirect(url_for("bills.list_bills"))
+
+
+@bp.route("/inbox/controller")
+@role_required("controller")
+def inbox_controller():
     args = request.args.to_dict()
-    args["approval_state"] = state
+    args["approval_state"] = "AP_Reviewed"
     args["status"] = args.get("status", "open")
-    return _render_list(args, title=f"Inbox — {state}", base_endpoint="bills.inbox",
-                        locked={"approval_state": state})
+    return _render_list(args, title="Inbox — Controller (AP Reviewed)",
+                        base_endpoint="bills.inbox_controller",
+                        locked={"approval_state": "AP_Reviewed"})
+
+
+@bp.route("/inbox/cfo")
+@login_required
+def inbox_cfo():
+    # The CFO inbox shows pay runs Submitted_to_CFO, which don't exist until
+    # Phase 4. Stub it (not a 404) so it's discoverable.
+    return render_template("inbox_cfo.html")
 
 
 # ----------------------------------------------------------------------
@@ -248,12 +276,17 @@ def detail(bill_id):
             breakdown = json.loads(meta["app_category_breakdown"])
         except ValueError:
             breakdown = []
+    cur_state = meta["approval_state"] if meta else "New"
+    missing_required = _missing_required(meta) if cur_state == "New" else []
+    can_reject = current_user.has_role("controller") and cur_state == "AP_Reviewed"
     return render_template(
         "bill_detail.html", bill=bill, meta=meta, lines=lines, notes=notes,
         todos=todos, audit=audit, breakdown=breakdown,
         classifications=CLASSIFICATIONS, channels=CHANNELS, methods=METHODS,
         can_edit=current_user.has_role("ap_clerk", "controller"),
         jira_base=_jira_base(), next_state=_next_state(meta),
+        missing_required=missing_required, can_reject=can_reject,
+        reject_prefix=REJECT_NOTE_PREFIX,
     )
 
 
@@ -344,9 +377,16 @@ def save_metadata(bill_id):
     return redirect(url_for("bills.detail", bill_id=bill_id))
 
 
-@bp.route("/bills/<bill_id>/review", methods=["POST"])
+def _missing_required(meta):
+    """Required metadata fields still empty before New -> AP_Reviewed."""
+    if not meta:
+        return [label for _k, label in REQUIRED_FOR_AP]
+    return [label for key, label in REQUIRED_FOR_AP if not meta[key]]
+
+
+@bp.route("/bills/<bill_id>/approve", methods=["POST"])
 @role_required("ap_clerk", "controller")
-def review(bill_id):
+def approve(bill_id):
     conn = db.get_db()
     meta = conn.execute("SELECT * FROM bill_metadata WHERE qb_bill_id=?", (bill_id,)).fetchone()
     if not meta:
@@ -355,12 +395,45 @@ def review(bill_id):
     if not nxt:
         flash("No forward transition available to you for this bill.", "error")
         return redirect(url_for("bills.detail", bill_id=bill_id))
+    if meta["approval_state"] == "New":
+        missing = _missing_required(meta)
+        if missing:
+            flash("Fill these before AP review: " + ", ".join(missing), "error")
+            return redirect(url_for("bills.detail", bill_id=bill_id))
+    action = "approve_ap_reviewed" if nxt == "AP_Reviewed" else "approve_controller_reviewed"
     conn.execute("UPDATE bill_metadata SET approval_state=?, updated_at=? WHERE qb_bill_id=?",
                  (nxt, sync._now_iso(), bill_id))
-    sync.log_audit(conn, current_user.id, "bill_metadata", bill_id, "state_transition",
+    sync.log_audit(conn, current_user.id, "bill_metadata", bill_id, action,
                    {"approval_state": meta["approval_state"]}, {"approval_state": nxt})
     conn.commit()
     flash(f"Marked {nxt.replace('_', ' ')}.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+@bp.route("/bills/<bill_id>/reject", methods=["POST"])
+@role_required("controller")
+def reject(bill_id):
+    conn = db.get_db()
+    meta = conn.execute("SELECT * FROM bill_metadata WHERE qb_bill_id=?", (bill_id,)).fetchone()
+    if not meta:
+        abort(404)
+    if meta["approval_state"] != "AP_Reviewed":
+        flash("Only AP-Reviewed bills can be rejected back to New.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash("A rejection reason is required.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    now = sync._now_iso()
+    conn.execute("UPDATE bill_metadata SET approval_state='New', updated_at=? WHERE qb_bill_id=?",
+                 (now, bill_id))
+    conn.execute("INSERT INTO note (qb_bill_id, user_id, body, created_at) VALUES (?,?,?,?)",
+                 (bill_id, current_user.id, REJECT_NOTE_PREFIX + reason, now))
+    sync.log_audit(conn, current_user.id, "bill_metadata", bill_id, "reject_to_new",
+                   {"approval_state": "AP_Reviewed"},
+                   {"approval_state": "New", "reason": reason})
+    conn.commit()
+    flash("Rejected back to New with a note.", "ok")
     return redirect(url_for("bills.detail", bill_id=bill_id))
 
 
