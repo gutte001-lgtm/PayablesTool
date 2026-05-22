@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Sync &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Warehouse sync</h1>
+
+  <h2>Warehouse</h2>
+  {% if health.ok %}
+    <p class="flash-ok flash">Connected &middot; {{ health.database }} &middot;
+       {{ health.driver }} &middot; {{ health.latency_ms }} ms</p>
+  {% else %}
+    <p class="flash-error flash">Unreachable: {{ health.error }}</p>
+  {% endif %}
+
+  <h2>Data</h2>
+  <table class="grid">
+    <tr><td>Bills stored</td><td>{{ fresh.n or 0 }} ({{ fresh.open_n or 0 }} open)</td></tr>
+    <tr><td>Newest QB update</td><td>{{ fresh.max_qb or '—' }}</td></tr>
+    <tr><td>Last synced</td><td>{{ fresh.max_sync or '—' }}</td></tr>
+    <tr><td>Next scheduled run</td><td>{{ next_run or '—' }}</td></tr>
+    <tr><td>Date-parse warnings</td><td>{{ warn.date_warn or 0 }}</td></tr>
+    <tr><td>Uncategorized bills</td><td>{{ warn.uncat or 0 }}</td></tr>
+  </table>
+
+  <form method="post" action="{{ url_for('admin.sync_pull') }}" style="margin:16px 0;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Pull Now</button>
+    <a href="{{ url_for('admin.sync_warnings') }}" style="margin-left:16px;">View warnings &raquo;</a>
+  </form>
+
+  <h2>Last run</h2>
+  {% if last %}
+    <table class="grid">
+      <tr><td>When</td><td>{{ last._logged_at }} ({{ last.trigger }})</td></tr>
+      <tr><td>Status</td><td>{{ last.status }}{% if last.error %} — {{ last.error }}{% endif %}</td></tr>
+      <tr><td>Pulled / new / updated</td><td>{{ last.pulled }} / {{ last.inserted }} / {{ last.updated }}</td></tr>
+      <tr><td>Metadata created / marked paid</td><td>{{ last.metadata_created }} / {{ last.marked_paid }}</td></tr>
+      <tr><td>Lines upserted / errors</td><td>{{ last.lines_upserted }} / {{ last.errors }}</td></tr>
+      <tr><td>Date / OPS-jira warnings</td><td>{{ last.date_parse_warnings }} / {{ last.ops_jira_mismatch_warnings }}</td></tr>
+      <tr><td><strong>AP tie-out</strong></td>
+          <td><strong>${{ "%.2f"|format((last.open_ap_total_cents or 0)/100) }}</strong>
+              across {{ last.open_bill_count }} open bills</td></tr>
+      <tr><td>Duration</td><td>{{ last.duration_ms }} ms</td></tr>
+    </table>
+  {% else %}
+    <p>No sync has run yet.</p>
+  {% endif %}
+
+  <h2>Recent runs</h2>
+  <table class="grid">
+    <tr><th>When</th><th>Trigger</th><th>Pulled</th><th>New</th><th>Paid</th>
+        <th>Errors</th><th>Open AP</th></tr>
+    {% for r in recent %}
+    <tr>
+      <td>{{ r._logged_at }}</td><td>{{ r.trigger }}</td>
+      <td>{{ r.pulled if r.pulled is defined else '—' }}</td>
+      <td>{{ r.inserted if r.inserted is defined else '—' }}</td>
+      <td>{{ r.marked_paid if r.marked_paid is defined else '—' }}</td>
+      <td>{{ r.errors if r.errors is defined else '—' }}</td>
+      <td>{% if r.open_ap_total_cents is defined %}${{ "%.2f"|format(r.open_ap_total_cents/100) }}{% else %}{{ r.status }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

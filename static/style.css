@@ -34,3 +34,14 @@ form button {
 .flash-ok { background: #e6f4ea; color: #1e7e34; }
 .flash-error { background: #fde8e8; color: #c0392b; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; }
+.content { max-width: 980px; }
+h2 { margin-top: 28px; font-size: 17px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+h3 { margin-top: 18px; font-size: 15px; }
+table.grid { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+table.grid th, table.grid td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.grid th { color: var(--muted); font-weight: 600; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 4px; }
+.inline-form input, .inline-form select { width: auto; padding: 7px 9px; }
+.inline-form button { width: auto; margin-top: 0; padding: 8px 14px; }
+.link-btn { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0 4px; width: auto; margin: 0; font-size: 13px; }
+.link-btn.danger { color: #c0392b; }

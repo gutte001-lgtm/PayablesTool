@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Sync warnings &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Sync warnings</h1>
+  <p><a href="{{ url_for('admin.sync_status') }}">&laquo; Back to sync</a></p>
+
+  <h2>OPS &harr; Jira mismatches ({{ mismatches|length }})</h2>
+  <p class="note">Memo-parsed OPS number disagrees with the line's
+     <code>jira_epic_id</code>. Surfaced for review; the sync is never blocked.</p>
+  {% if mismatches %}
+  <table class="grid">
+    <tr><th>Bill id</th><th>Vendor</th><th>Memo OPS</th><th>jira_epic_id</th><th>Logged</th></tr>
+    {% for m in mismatches %}
+    <tr>
+      <td>{{ m.qb_bill_id }}</td><td>{{ m.vendor or '—' }}</td>
+      <td>{{ m.memo_ops or '—' }}</td><td>{{ m.jira_epic_id or '—' }}</td>
+      <td>{{ m.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p>None.</p>{% endif %}
+
+  <h2>Date-parse warnings ({{ date_warns|length }})</h2>
+  <p class="note">A bill whose TxnDate or DueDate could not be parsed; that date
+     is stored as NULL. The bill still syncs.</p>
+  {% if date_warns %}
+  <table class="grid">
+    <tr><th>Bill id</th><th>Vendor</th><th>Bill #</th><th>Bill date</th><th>Due date</th></tr>
+    {% for d in date_warns %}
+    <tr>
+      <td>{{ d.qb_bill_id }}</td><td>{{ d.vendor or '—' }}</td>
+      <td>{{ d.bill_number or '—' }}</td>
+      <td>{{ d.bill_date or 'NULL' }}</td><td>{{ d.due_date or 'NULL' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p>None.</p>{% endif %}
+</div>
+{% endblock %}
