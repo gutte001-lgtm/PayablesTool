@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card login-card">
+  <h1>Sign in</h1>
+  <form method="post" action="{{ url_for('auth.login') }}">
+    {{ form.csrf_token }}
+    <label for="username">Username</label>
+    {{ form.username(id="username", autofocus=true, autocomplete="username") }}
+    <label for="password">Password</label>
+    {{ form.password(id="password", autocomplete="current-password") }}
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+{% endblock %}
