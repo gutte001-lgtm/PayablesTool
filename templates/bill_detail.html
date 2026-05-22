@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}{{ bill.vendor or bill.qb_bill_id }} &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
+{% block content %}
+<div class="card">
+  <p class="note"><a href="{{ url_for('bills.list_bills') }}">&laquo; Bills</a>
+     &middot; <a href="{{ url_for('bills.inbox') }}">Inbox</a></p>
+  <div class="detail-head">
+    <h1>{{ bill.vendor or '—' }}</h1>
+    <div>
+      <span class="badge state">{{ meta.approval_state if meta else 'New' }}</span>
+      {% if next_state %}
+      <form method="post" action="{{ url_for('bills.review', bill_id=bill.qb_bill_id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Mark {{ next_state.replace('_',' ') }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Region 1: read-only QB facts -->
+  <h2>From QuickBooks (read-only)</h2>
+  <table class="grid kv">
+    <tr><td>Bill #</td><td>{{ bill.bill_number or '—' }}</td>
+        <td>Bill date</td><td>{{ bill.bill_date or '—' }}</td></tr>
+    <tr><td>Amount</td><td>{{ money(bill.amount_cents) }}</td>
+        <td>Due date</td><td>{{ bill.due_date or '—' }}</td></tr>
+    <tr><td>Open balance</td><td><strong>{{ money(bill.open_balance_cents) }}</strong></td>
+        <td>Paid?</td><td>{{ 'yes' if bill.is_paid else 'no' }}</td></tr>
+    <tr><td>Currency</td><td>{{ bill.currency or '—' }}</td>
+        <td>Terms</td><td>{{ bill.sales_term or '—' }}</td></tr>
+    <tr><td>Department</td><td>{{ bill.department or '—' }}</td>
+        <td>AP account</td><td>{{ bill.ap_account or '—' }}</td></tr>
+    <tr><td>Memo</td><td colspan="3" class="memo">{{ bill.qb_memo or '—' }}</td></tr>
+  </table>
+
+  <h3>GL lines</h3>
+  <table class="grid">
+    <tr><th>#</th><th>Description</th><th style="text-align:right">Amount</th>
+        <th>GL account</th><th>Class</th><th>Item</th></tr>
+    {% for l in lines %}
+    <tr><td>{{ l.line_number }}</td><td>{{ l.line_description or '—' }}</td>
+        <td style="text-align:right">{{ money(l.line_amount_cents) }}</td>
+        <td>{{ l.gl_account_name or '—' }}</td><td>{{ l.qb_class_name or '—' }}</td>
+        <td>{{ l.item_name or '—' }}</td></tr>
+    {% else %}<tr><td colspan="6">No lines.</td></tr>{% endfor %}
+  </table>
+  {% if breakdown %}
+  <p class="note">Category split:
+    {% for b in breakdown %}<span class="badge">{{ b.category }} {{ money(b.amount_cents) }} ({{ b.line_count }})</span> {% endfor %}
+  </p>
+  {% endif %}
+
+  <!-- Region 2: editable metadata -->
+  <h2>Metadata</h2>
+  <p class="note">Category: <strong>{{ meta.app_category or '—' }}</strong>
+     <span class="badge">{{ meta.app_category_source or 'n/a' }}</span>
+     {% if meta.has_credit_applied %}<span class="badge">credit applied</span>{% endif %}</p>
+  {% if can_edit %}
+  <form method="post" action="{{ url_for('bills.save_metadata', bill_id=bill.qb_bill_id) }}" class="metaform">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fgrid">
+      <label>Classification
+        <select name="classification">
+          <option value="">(unset)</option>
+          {% for c in classifications %}<option value="{{ c }}" {{ 'selected' if meta.classification==c }}>{{ c }}</option>{% endfor %}
+        </select></label>
+      <label>Manual category override
+        <input name="app_category_manual" value="{{ meta.app_category_manual or '' }}" placeholder="(blank = use rules)"></label>
+      <label>Approver
+        <input name="approver_name" value="{{ meta.approver_name or '' }}"></label>
+      <label>Approval channel
+        <select name="approval_channel">
+          <option value="">—</option>
+          {% for ch in channels %}<option value="{{ ch }}" {{ 'selected' if meta.approval_channel==ch }}>{{ ch }}</option>{% endfor %}
+        </select></label>
+      <label>Approval date
+        <input type="date" name="approval_date" value="{{ meta.approval_date or '' }}"></label>
+      <label>Service performed
+        <input type="date" name="service_performed_date" value="{{ meta.service_performed_date or '' }}"></label>
+      <label>Receipt / delivery
+        <input type="date" name="receipt_delivery_date" value="{{ meta.receipt_delivery_date or '' }}"></label>
+      <label>Proposed payment method
+        <select name="proposed_payment_method">
+          <option value="">—</option>
+          {% for me in methods %}<option value="{{ me }}" {{ 'selected' if meta.proposed_payment_method==me }}>{{ me }}</option>{% endfor %}
+        </select></label>
+      <label>Proposed pay date
+        <input type="date" name="proposed_pay_date" value="{{ meta.proposed_pay_date or '' }}"></label>
+    </div>
+    <div class="checks">
+      <label class="chk"><input type="checkbox" name="ok_for_ceo" value="1" {{ 'checked' if meta.ok_for_ceo }}> OK for CEO</label>
+      <label class="chk"><input type="checkbox" name="rush_flag" value="1" {{ 'checked' if meta.rush_flag }}> Rush</label>
+      <label class="chk"><input type="checkbox" name="partial_payment_flag" value="1" {{ 'checked' if meta.partial_payment_flag }}> Partial payment</label>
+    </div>
+    <p class="note">Refund-Visibility and Prepayment-Deposit force “OK for CEO” off.</p>
+    <button type="submit">Save changes</button>
+  </form>
+  {% else %}
+  <p class="note">You have read-only access to this bill's metadata.</p>
+  {% endif %}
+
+  <!-- Region 3: notes + todos -->
+  <div class="two-col">
+    <div>
+      <h2>Notes</h2>
+      <form method="post" action="{{ url_for('bills.add_note', bill_id=bill.qb_bill_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <textarea name="body" rows="2" placeholder="Add a note (append-only)…"></textarea>
+        <button type="submit">Add note</button>
+      </form>
+      <ul class="log">
+        {% for n in notes %}
+        <li><span class="meta">{{ n.created_at }} &middot; {{ n.author or 'system' }}</span><br>{{ n.body }}</li>
+        {% else %}<li class="note">No notes yet.</li>{% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h2>To-dos</h2>
+      {% if can_edit %}
+      <form method="post" action="{{ url_for('bills.add_todo', bill_id=bill.qb_bill_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <textarea name="body" rows="2" placeholder="Add a to-do…"></textarea>
+        <button type="submit">Add to-do</button>
+      </form>
+      {% endif %}
+      <ul class="log">
+        {% for t in todos %}
+        <li class="{{ 'done' if t.completed_at }}">
+          {{ t.body }}
+          {% if t.completed_at %}<span class="meta">✓ {{ t.completed_at }} {{ t.done_by or '' }}</span>
+          {% elif can_edit %}
+          <form method="post" action="{{ url_for('bills.complete_todo', bill_id=bill.qb_bill_id, todo_id=t.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="link-btn">complete</button>
+          </form>{% endif %}
+        </li>
+        {% else %}<li class="note">No to-dos.</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <!-- Audit panel -->
+  <h2>Recent activity</h2>
+  <table class="grid">
+    <tr><th>When</th><th>Who</th><th>Action</th><th>Change</th></tr>
+    {% for a in audit %}
+    <tr><td>{{ a.created_at }}</td><td>{{ a.who or 'system' }}</td><td>{{ a.action }}</td>
+        <td class="memo">{% if a.after %}{{ a.after }}{% else %}—{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4">No activity recorded.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

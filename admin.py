@@ -80,6 +80,7 @@ def sync_status():
         recent=_recent_syncs(),
         fresh=fresh,
         warn=warn,
+        kpis=sync.compute_kpis(db.get_db()),
         next_run=_next_run_iso(),
         can_pull=True,
     )

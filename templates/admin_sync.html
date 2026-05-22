@@ -4,6 +4,12 @@
 <div class="card">
   <h1>Warehouse sync</h1>
 
+  <div class="kpis">
+    <div class="kpi"><span>Total open AP</span><b>${{ "%.2f"|format((kpis.total_cents or 0)/100) }}</b><em>{{ kpis.total_n }} bills</em></div>
+    <div class="kpi"><span>Current (bill_date &le; today)</span><b>${{ "%.2f"|format((kpis.current_cents or 0)/100) }}</b><em>{{ kpis.current_n }} bills · ties to QB aging</em></div>
+    <div class="kpi"><span>Real payable</span><b>${{ "%.2f"|format((kpis.real_cents or 0)/100) }}</b><em>{{ kpis.real_n }} bills · excl. prepay/refund</em></div>
+  </div>
+
   <h2>Warehouse</h2>
   {% if health.ok %}
     <p class="flash-ok flash">Connected &middot; {{ health.database }} &middot;

@@ -18,6 +18,7 @@ from flask_wtf import CSRFProtect
 import db
 from admin import init_admin
 from auth import init_auth
+from bills import init_bills
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -43,6 +44,7 @@ csrf = CSRFProtect(app)
 db.init_app(app)
 init_auth(app)
 init_admin(app)
+init_bills(app)
 
 
 @app.route("/")

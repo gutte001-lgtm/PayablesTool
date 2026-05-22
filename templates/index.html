@@ -8,15 +8,15 @@
   {% if current_user.must_change_password %}
     <p class="note">Your password is a default seed value and should be changed.</p>
   {% endif %}
-  {% if current_user.has_role('ap_clerk', 'controller') %}
   <p>
-    <a href="{{ url_for('admin.sync_status') }}">Warehouse sync</a> &middot;
-    <a href="{{ url_for('admin.rules') }}">Categorization rules</a> &middot;
-    <a href="{{ url_for('health') }}">Health (JSON)</a>
+    <a href="{{ url_for('bills.list_bills') }}">Bills</a>
+    {% if current_user.has_role('ap_clerk', 'controller') %}
+      &middot; <a href="{{ url_for('bills.inbox') }}">Inbox</a>
+      &middot; <a href="{{ url_for('admin.sync_status') }}">Warehouse sync</a>
+      &middot; <a href="{{ url_for('admin.rules') }}">Categorization rules</a>
+    {% endif %}
+    &middot; <a href="{{ url_for('health') }}">Health (JSON)</a>
   </p>
-  {% else %}
-  <p><a href="{{ url_for('health') }}">View <code>/health</code> (JSON)</a></p>
-  {% endif %}
-  <p class="note">Bill list/detail UI and exports arrive in later phases.</p>
+  <p class="note">Pay-run builder and exports arrive in later phases.</p>
 </div>
 {% endblock %}
