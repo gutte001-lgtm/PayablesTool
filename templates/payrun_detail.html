@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ run.name }} &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
+
+{# One pay-run line as a <tr> with 6 columns: Vendor | Bill # | Due | Method | Amount | Status/actions #}
+{% macro linerow(ln, is_draft, can_edit, can_review, run_id, methods) %}
+<tr>
+  <td><a href="{{ url_for('bills.detail', bill_id=ln.qb_bill_id) }}">{{ ln.vendor or '—' }}</a></td>
+  <td>{{ ln.bill_number or '—' }}</td>
+  <td>{{ ln.due_date or '—' }}</td>
+  {% if is_draft and can_edit %}
+  <td><select name="payment_method" form="lf{{ ln.id }}">
+        <option value="">(set method)</option>
+        {% for me in methods %}<option value="{{ me }}" {{ 'selected' if ln.payment_method==me }}>{{ me }}</option>{% endfor %}
+      </select></td>
+  <td style="text-align:right" title="full open balance — partials deferred to Phase 5">{{ money(ln.open_balance_cents) }}</td>
+  <td>
+    <form id="lf{{ ln.id }}" method="post" action="{{ url_for('payruns.edit_line', run_id=run_id, line_id=ln.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
+    <label class="chk"><input type="checkbox" name="included" value="1" form="lf{{ ln.id }}" {{ 'checked' if ln.included }}> incl</label>
+    <button form="lf{{ ln.id }}" class="link-btn">Save</button>
+  </td>
+  {% else %}
+  <td>{{ ln.payment_method or '—' }}</td>
+  <td style="text-align:right">{{ money(ln.amount_to_pay_cents) }}</td>
+  <td>
+    <span class="badge {{ 'ceo' if ln.line_state=='Approved' else ('rush' if ln.line_state=='Rejected' else '') }}">{{ ln.line_state }}</span>
+    {% if ln.cfo_note %}<span class="note" title="review note">“{{ ln.cfo_note }}”</span>{% endif %}
+    {% if can_review %}
+    <form method="post" action="{{ url_for('payruns.review_line', run_id=run_id, line_id=ln.id) }}" class="reviewform">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="note" placeholder="note (required to reject)" style="width:160px">
+      <button name="action" value="approve" class="link-btn">Approve</button>
+      <button name="action" value="reject" class="link-btn danger">Reject</button>
+    </form>
+    {% endif %}
+  </td>
+  {% endif %}
+</tr>
+{% endmacro %}
+
+{% macro subtotal(label, cents) %}
+<tr class="subtotal"><td colspan="5" style="text-align:right">{{ label }}</td>
+    <td style="text-align:right">{{ money(cents) }}</td></tr>
+{% endmacro %}
+
+{% block content %}
+<div class="card">
+  <p class="note"><a href="{{ url_for('payruns.list_runs') }}">&laquo; Pay Runs</a></p>
+  <div class="detail-head">
+    <h1>{{ run.name }}</h1>
+    <div class="actions">
+      <span class="badge state">{{ run.status.replace('_', ' ') }}</span>
+      {% if next_action %}
+      <form method="post" action="{{ url_for('payruns.advance', run_id=run.id) }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="{{ next_action.action }}">
+        <button type="submit">{{ next_action.action.replace('_', ' ')|title }} &rarr; {{ next_action.to.replace('_', ' ') }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <p class="note">Week ending {{ run.week_ending or '—' }} &middot; created by {{ run.created_by_name or '—' }}
+     &middot; {{ grouped.payable_count }} payable of {{ grouped.line_count }} line(s)</p>
+  {% if can_review %}<p class="note">You can approve/reject individual lines below.</p>{% endif %}
+
+  {# ---- Bill picker (Draft only) ---- #}
+  {% if is_draft and can_edit %}
+  <h2>Add bills <span class="count">({{ candidates|length }} eligible)</span></h2>
+  <p class="note">Controller-reviewed, open bills not already on a run. Flags are advisory — selectable anyway.</p>
+  <form method="post" action="{{ url_for('payruns.add_lines', run_id=run.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <table class="grid">
+      <tr><th></th><th>Vendor</th><th>Bill #</th><th>Due</th>
+          <th style="text-align:right">Open</th><th>Flags</th></tr>
+      {% for c in candidates %}
+      <tr>
+        <td><input type="checkbox" name="bill_ids" value="{{ c.qb_bill_id }}"></td>
+        <td><a href="{{ url_for('bills.detail', bill_id=c.qb_bill_id) }}">{{ c.vendor or '—' }}</a></td>
+        <td>{{ c.bill_number or '—' }}</td>
+        <td>{{ c.due_date or '—' }}</td>
+        <td style="text-align:right">{{ money(c.open_balance_cents) }}</td>
+        <td>
+          {% if c.is_contractor %}<span class="badge pill">Contractor</span>{% endif %}
+          {% if c.past_sla %}<span class="badge warn" title="past SLA">⏰ SLA</span>{% endif %}
+          {% if c.open_item_count %}<span class="badge warn" title="open items">{{ c.open_item_count }} open</span>{% endif %}
+          {% if c.tag_count %}<span class="badge" title="active tags">🏷 {{ c.tag_count }}</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}<tr><td colspan="6">No eligible bills (none Controller-reviewed + open + unclaimed).</td></tr>{% endfor %}
+    </table>
+    {% if candidates %}<button type="submit">Add selected to run</button>{% endif %}
+  </form>
+  {% endif %}
+
+  {# ---- Grouped payable lines ---- #}
+  <h2>Lines</h2>
+  {% if grouped.payable_count %}
+  <table class="grid payrun">
+    <tr><th>Vendor</th><th>Bill #</th><th>Due</th><th>Method</th>
+        <th style="text-align:right">Amount</th><th>Status</th></tr>
+    {% for g in grouped.contractor_groups %}
+      {% for ln in g.lines %}{{ linerow(ln, is_draft, can_edit, can_review, run.id, methods) }}{% endfor %}
+      {{ subtotal("Contractor " + g.method + " subtotal", g.subtotal) }}
+    {% endfor %}
+    {% if grouped.contractor_groups %}
+      <tr class="total"><td colspan="5" style="text-align:right">Contractor Total</td>
+          <td style="text-align:right">{{ money(grouped.contractor_total) }}</td></tr>
+    {% endif %}
+    {% for g in grouped.other_groups %}
+      {% for ln in g.lines %}{{ linerow(ln, is_draft, can_edit, can_review, run.id, methods) }}{% endfor %}
+      {{ subtotal(g.method + " subtotal", g.subtotal) }}
+    {% endfor %}
+    {% if grouped.other_groups %}
+      <tr class="total"><td colspan="5" style="text-align:right">Other Total</td>
+          <td style="text-align:right">{{ money(grouped.other_total) }}</td></tr>
+    {% endif %}
+    <tr class="grand"><td colspan="5" style="text-align:right">Grand Total</td>
+        <td style="text-align:right">{{ money(grouped.grand_total) }}</td></tr>
+  </table>
+  {% else %}
+  <p class="note">No payable lines yet{{ ' — add bills above.' if is_draft else '.' }}</p>
+  {% endif %}
+
+  {# ---- Deferred (excluded / rejected) lines ---- #}
+  {% if grouped.deferred %}
+  <h2>Deferred / excluded <span class="count">({{ grouped.deferred|length }})</span></h2>
+  <p class="note">Not paid in this run — these bills return to next week's pool.</p>
+  <table class="grid">
+    <tr><th>Vendor</th><th>Bill #</th><th style="text-align:right">Amount</th><th>Why</th><th>Note</th></tr>
+    {% for ln in grouped.deferred %}
+    <tr>
+      <td><a href="{{ url_for('bills.detail', bill_id=ln.qb_bill_id) }}">{{ ln.vendor or '—' }}</a></td>
+      <td>{{ ln.bill_number or '—' }}</td>
+      <td style="text-align:right">{{ money(ln.amount_to_pay_cents) }}</td>
+      <td>{{ 'Rejected' if ln.line_state=='Rejected' else 'Excluded' }}{% if ln.reviewed_by_name %} by {{ ln.reviewed_by_name }}{% endif %}</td>
+      <td>{{ ln.cfo_note or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

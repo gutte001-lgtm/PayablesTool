@@ -293,9 +293,11 @@ def inbox_controller():
 @bp.route("/inbox/cfo")
 @login_required
 def inbox_cfo():
-    # The CFO inbox shows pay runs Submitted_to_CFO, which don't exist until
-    # Phase 4. Stub it (not a 404) so it's discoverable.
-    return render_template("inbox_cfo.html")
+    # Phase 4: the CFO inbox shows pay runs Submitted_to_CFO awaiting approval.
+    # Local import avoids a bills<->payruns import cycle (payruns imports bills).
+    import payruns
+    runs = payruns.cfo_queue(db.get_db())
+    return render_template("inbox_cfo.html", runs=runs)
 
 
 # ----------------------------------------------------------------------

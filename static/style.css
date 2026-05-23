@@ -150,3 +150,11 @@ h1 .count { color: var(--muted); font-weight: 400; font-size: 16px; }
 .oi-resolve-form button { width: auto; margin: 0; }
 ul.oi-list li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
 ul.oi-list .oi-resolve-form { flex-basis: 100%; }
+
+/* ===== Phase 4: pay-run builder =========================================== */
+table.payrun tr.subtotal td { background: #f7f9fb; color: var(--muted); font-size: 13px; }
+table.payrun tr.total td { background: #eef1f4; font-weight: 600; }
+table.payrun tr.grand td { background: #e8eefb; font-weight: 700; border-top: 2px solid var(--accent); }
+.reviewform { display: inline-flex; gap: 6px; align-items: center; margin: 4px 0 0; }
+.reviewform input { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
+table.payrun select, table.payrun input { padding: 4px 6px; font-size: 13px; }

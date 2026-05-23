@@ -17,8 +17,11 @@
           <a href="{{ url_for('bills.inbox') }}">Inbox{% if nav_tag_count %}
             <span class="navbadge" title="{{ nav_tag_count }} active tag(s) for you">{{ nav_tag_count }}</span>{% endif %}</a>
           <a href="{{ url_for('followup.followup') }}">Follow-up</a>
+          <a href="{{ url_for('payruns.list_runs') }}">Pay Runs</a>
         {% elif current_user.has_role('cfo') %}
-          <a href="{{ url_for('bills.inbox_cfo') }}">Inbox</a>
+          <a href="{{ url_for('bills.inbox_cfo') }}">Inbox{% if nav_cfo_queue %}
+            <span class="navbadge" title="{{ nav_cfo_queue }} pay run(s) awaiting you">{{ nav_cfo_queue }}</span>{% endif %}</a>
+          <a href="{{ url_for('payruns.list_runs') }}">Pay Runs</a>
         {% endif %}
       </nav>
       <span class="who">{{ current_user.name }} &middot; {{ current_user.role }}</span>

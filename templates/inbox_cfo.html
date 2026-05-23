@@ -1,11 +1,27 @@
 {% extends "base.html" %}
 {% block title %}CFO Inbox &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
 <div class="card">
-  <h1>CFO Inbox</h1>
-  <p class="note">The CFO inbox shows <strong>pay runs submitted to the CFO</strong>
-     for approval. Pay runs arrive in <strong>Phase 4</strong> — there's nothing
-     here yet.</p>
-  <p><a href="{{ url_for('bills.list_bills') }}">Browse all bills &raquo;</a></p>
+  <h1>CFO Inbox <span class="count">({{ runs|length }})</span></h1>
+  <p class="note">Pay runs submitted to the CFO for approval. Open one to approve
+     or reject individual lines, then approve the run.</p>
+  {% if runs %}
+  <table class="grid">
+    <tr><th>#</th><th>Name</th><th>Week ending</th>
+        <th style="text-align:right">Total</th><th>Submitted by</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td><a href="{{ url_for('payruns.detail', run_id=r.id) }}">{{ r.name }}</a></td>
+      <td>{{ r.week_ending or '—' }}</td>
+      <td style="text-align:right">{{ money(r.total_cents) }}</td>
+      <td>{{ r.created_by_name or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="note">No pay runs awaiting your approval. 🎉</p>
+  {% endif %}
 </div>
 {% endblock %}

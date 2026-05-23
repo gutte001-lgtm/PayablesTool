@@ -23,6 +23,7 @@ from admin import init_admin
 from auth import init_auth
 from bills import init_bills
 from followup import init_followup
+from payruns import init_payruns
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -50,6 +51,7 @@ init_auth(app)
 init_admin(app)
 init_bills(app)
 init_followup(app)
+init_payruns(app)
 
 
 @app.context_processor
@@ -69,6 +71,11 @@ def inject_nav_badges():
         out["nav_open_items_count"] = tags.open_item_total(db.get_db())
     except Exception:
         out["nav_open_items_count"] = 0
+    if current_user.has_role("cfo"):
+        try:
+            out["nav_cfo_queue"] = len(__import__("payruns").cfo_queue(db.get_db()))
+        except Exception:
+            out["nav_cfo_queue"] = 0
     return out
 
 
