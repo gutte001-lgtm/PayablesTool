@@ -98,3 +98,38 @@ ul.log li.reject-note { background: #fdf3f3; border-left: 3px solid #c0392b; pad
 .rejectform { display: none; margin: 10px 0; }
 .rejectform textarea { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 .link-btn.danger { color: #c0392b; font-size: 14px; }
+
+/* ===== Phase 3.5: follow-up workspace, status pills, tags ================= */
+/* top-nav links + tag-count badge */
+.topnav { display: flex; gap: 14px; align-items: center; margin-left: 18px; }
+.topnav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+.navbadge {
+  display: inline-block; min-width: 17px; text-align: center; background: #c0392b;
+  color: #fff; border-radius: 9px; padding: 0 5px; font-size: 11px; font-weight: 700;
+}
+/* status pill badge (distinct from approval-state badge) */
+.badge.pill { background: #ede7fb; color: #5b3ea8; }
+/* activity aging tints (text + row) */
+.age-warn  { color: #8a6d3b; font-weight: 600; }
+.age-stale { color: #c0392b; font-weight: 700; }
+tr.row-warn  td { background: #fdf8ec; }
+tr.row-stale td { background: #fdf3f3; }
+/* edit boxes (status / tag toggles on detail) */
+.editbox { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0; padding: 10px;
+  background: #f7f9fb; border: 1px solid var(--line); border-radius: 8px; }
+.editbox .inline-form { margin: 0; }
+/* tag chips */
+.tagchips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: #eef1f4;
+  border: 1px solid var(--line); border-radius: 14px; padding: 3px 10px; font-size: 13px; }
+.chip .chip-meta { color: var(--muted); font-size: 12px; }
+.chip form { margin: 0; }
+.chip-x { background: none; border: 0; color: #c0392b; cursor: pointer; width: auto;
+  margin: 0; padding: 0 0 0 2px; font-size: 13px; }
+.chip-sm { display: inline-block; background: #eef1f4; border-radius: 10px;
+  padding: 0 6px; font-size: 11px; }
+/* "Tagged for you" section + follow-up counts */
+.tagged-section { margin: 8px 0 16px; padding: 12px 14px; background: #fffaf0;
+  border: 1px solid #f0e0c0; border-radius: 8px; }
+.tagged-section h2 { margin-top: 0; border: 0; }
+h2 .count { color: var(--muted); font-weight: 400; font-size: 14px; }

@@ -9,6 +9,11 @@
     <h1>{{ bill.vendor or '—' }}</h1>
     <div class="actions">
       <span class="badge state">{{ meta.approval_state if meta else 'New' }}</span>
+      {% if meta and meta.status_pill %}<span class="badge pill">{{ meta.status_pill }}</span>{% endif %}
+      {% if can_edit %}
+        <button type="button" id="showpill">Status…</button>
+        <button type="button" id="showtag">Tag someone…</button>
+      {% endif %}
       {% if next_state %}
         {% if missing_required %}
         <span class="note">To mark {{ next_state.replace('_',' ') }}: fill {{ missing_required|join(', ') }}.</span>
@@ -35,6 +40,59 @@
     (function(){var b=document.getElementById('showreject'),f=document.getElementById('rejectform');
      if(b){b.addEventListener('click',function(){f.style.display=(f.style.display==='block'?'none':'block');});}})();
   </script>
+  {% endif %}
+
+  {% if can_edit %}
+  <!-- Phase 3.5: status pill + tag controls (metadata only; do not gate approval) -->
+  <div id="pillbox" class="editbox" style="display:none;">
+    <form method="post" action="{{ url_for('bills.set_status_pill', bill_id=bill.qb_bill_id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="value">
+        <option value="">— (clear) —</option>
+        {% for p in pills %}<option value="{{ p }}" {{ 'selected' if meta and meta.status_pill==p }}>{{ p }}</option>{% endfor %}
+      </select>
+      <button type="submit">Set status</button>
+    </form>
+    <form method="post" action="{{ url_for('admin.status_pills_add') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="value" placeholder="+ Add new status…" maxlength="40">
+      <button type="submit">Add</button>
+    </form>
+  </div>
+  <div id="tagbox" class="editbox" style="display:none;">
+    <form method="post" action="{{ url_for('bills.tag_create', bill_id=bill.qb_bill_id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="user_id" required>
+        <option value="">— tag whom? —</option>
+        {% for u in taggable_users %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}
+      </select>
+      <input name="note" placeholder="optional note">
+      <button type="submit">Tag</button>
+    </form>
+  </div>
+  <script>
+    (function(){
+      function toggle(btn,box){var b=document.getElementById(btn),x=document.getElementById(box);
+        if(b&&x){b.addEventListener('click',function(){x.style.display=(x.style.display==='flex'?'none':'flex');});}}
+      toggle('showpill','pillbox'); toggle('showtag','tagbox');
+    })();
+  </script>
+  {% endif %}
+
+  {% if active_tags %}
+  <div class="tagchips">
+    {% for t in active_tags %}
+    <span class="chip">🏷 <strong>{{ t.tagged_user_name }}</strong>
+      <span class="chip-meta">by {{ t.tagged_by_name }} · {{ t.tagged_at[:10] }}{% if t.note %} · {{ t.note }}{% endif %}</span>
+      {% if t.tagged_user_id == current_user.id or current_user.has_role('controller') %}
+      <form method="post" action="{{ url_for('bills.tag_clear', bill_id=bill.qb_bill_id, tag_id=t.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="chip-x" title="mark done (clears the tag)">✕</button>
+      </form>
+      {% endif %}
+    </span>
+    {% endfor %}
+  </div>
   {% endif %}
 
   <!-- Region 1: read-only QB facts -->
@@ -131,7 +189,8 @@
       <ul class="log">
         {% for n in notes %}
         {% set is_rej = n.body.startswith(reject_prefix) %}
-        <li class="{{ 'reject-note' if is_rej }}"><span class="meta">{{ n.created_at }} &middot; {{ n.author or 'system' }}</span>{% if is_rej %} <span class="badge warn">rejection</span>{% endif %}<br>{{ n.body }}</li>
+        {% set tint = 'age-stale' if n.age_bd >= 10 else ('age-warn' if n.age_bd >= 5 else '') %}
+        <li class="{{ 'reject-note ' if is_rej }}{{ tint }}"><span class="meta">{{ n.created_at }} &middot; {{ n.author or 'system' }} &middot; {{ n.age_bd }}d ago</span>{% if is_rej %} <span class="badge warn">rejection</span>{% endif %}<br>{{ n.body }}</li>
         {% else %}<li class="note">No notes yet.</li>{% endfor %}
       </ul>
     </div>

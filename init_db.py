@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS bill_metadata (
     rush_flag               INTEGER NOT NULL DEFAULT 0,
     has_credit_applied      INTEGER NOT NULL DEFAULT 0,
     partial_payment_flag    INTEGER NOT NULL DEFAULT 0,
+    status_pill             TEXT,        -- Phase 3.5; FK-ish to status_pill_lookup.value
+                                         -- (enforced in app code, not DB), nullable = no pill
     created_at              TEXT NOT NULL,
     updated_at             TEXT NOT NULL
 );
@@ -237,10 +239,60 @@ CREATE INDEX IF NOT EXISTS idx_payrunline_run  ON pay_run_line(pay_run_id);
 CREATE INDEX IF NOT EXISTS idx_payrunline_bill ON pay_run_line(qb_bill_id);
 """
 
+# ===== Phase 3.5 -- follow-up workspace (status pills + bill tags) ==========
+# Kept as a separate constant so the one-shot migration
+# (migrations/001_phase_3_5.py) reuses the EXACT DDL when upgrading the live
+# 493-bill DB. Every statement is IF NOT EXISTS, so re-running is harmless.
+PHASE_3_5_SCHEMA = """
+CREATE TABLE IF NOT EXISTS status_pill_lookup (
+    value      TEXT PRIMARY KEY,
+    created_by INTEGER REFERENCES users(id),  -- NULL for seed pills
+    created_at TEXT,
+    is_seed    INTEGER NOT NULL DEFAULT 0     -- 1 = shipped seed, 0 = user-added
+);
+
+CREATE TABLE IF NOT EXISTS bill_tag (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    qb_bill_id         TEXT    NOT NULL REFERENCES bill(qb_bill_id),
+    tagged_user_id     INTEGER NOT NULL REFERENCES users(id),
+    tagged_by_user_id  INTEGER NOT NULL REFERENCES users(id),
+    tagged_at          TEXT    NOT NULL,
+    cleared_at         TEXT,                  -- NULL = active tag
+    cleared_by_user_id INTEGER REFERENCES users(id),
+    note               TEXT
+);
+-- "tagged for me" query (active tags for a user); per-bill chip display.
+CREATE INDEX IF NOT EXISTS idx_billtag_user ON bill_tag(tagged_user_id, cleared_at);
+CREATE INDEX IF NOT EXISTS idx_billtag_bill ON bill_tag(qb_bill_id, cleared_at);
+"""
+
+SCHEMA = SCHEMA + PHASE_3_5_SCHEMA
+
+# Seed status pills (is_seed=1). Shared by init_db (fresh DB) and the migration.
+SEED_PILLS = ("Waiting on Vendor", "Waiting on Approver", "In Review", "Blocked")
+
 
 def create_schema(conn) -> None:
     conn.executescript(SCHEMA)
     conn.commit()
+
+
+def seed_status_pills(conn) -> list:
+    """Insert any missing seed pills (is_seed=1). Idempotent (value is PK).
+    Returns the list of pill values created this run."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(sep=" ", timespec="seconds")
+    created = []
+    for value in SEED_PILLS:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO status_pill_lookup "
+            "(value, created_by, created_at, is_seed) VALUES (?, NULL, ?, 1)",
+            (value, now),
+        )
+        if cur.rowcount:
+            created.append(value)
+    conn.commit()
+    return created
 
 
 def seed_users(conn) -> list:
@@ -283,6 +335,7 @@ def init() -> None:
     try:
         create_schema(conn)
         created = seed_users(conn)
+        pills_created = seed_status_pills(conn)
         rows = conn.execute(
             "SELECT username, role, is_active FROM users ORDER BY id"
         ).fetchall()
@@ -296,6 +349,7 @@ def init() -> None:
     print(f"payables.db ready at {DB_PATH}")
     print(f"tables: {tables}")
     print(f"seeded this run: {created or 'none (all already present)'}")
+    print(f"status pills seeded this run: {pills_created or 'none (all already present)'}")
     print("users:")
     for r in rows:
         state = "active" if r["is_active"] else "inactive (no login v1)"

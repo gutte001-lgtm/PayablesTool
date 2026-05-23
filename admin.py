@@ -19,6 +19,7 @@ from flask_login import current_user, login_required
 
 import db
 import sync
+import tags
 import warehouse
 from auth import role_required
 
@@ -239,6 +240,36 @@ def vendor_default_delete(vendor_id):
     sync.recompute_all()
     flash("Vendor default removed and bills recomputed.", "ok")
     return redirect(url_for("admin.rules"))
+
+
+# ----------------------------------------------------------------------
+# /admin/status_pills -- add a follow-up status pill to the lookup (Phase 3.5)
+# ----------------------------------------------------------------------
+
+@bp.route("/status_pills", methods=["POST"])
+@role_required("ap_clerk", "controller")
+def status_pills_add():
+    """Add a new status-pill value to the lookup. Triggered from the inline
+    "+ Add new…" affordance on the bill-detail pill dropdown, so we redirect
+    back to wherever it was submitted from. Trim + non-empty + case-insensitive
+    uniqueness enforced."""
+    value = (request.form.get("value") or "").strip()
+    back = request.referrer or url_for("bills.list_bills")
+    if not value:
+        flash("Status pill can't be empty.", "error")
+        return redirect(back)
+    conn = db.get_db()
+    if tags.pill_exists_ci(conn, value):
+        flash(f"“{value}” is already a status pill.", "error")
+        return redirect(back)
+    conn.execute(
+        "INSERT INTO status_pill_lookup (value, created_by, created_at, is_seed) "
+        "VALUES (?,?,?,0)", (value, current_user.id, sync._now_iso()))
+    sync.log_audit(conn, current_user.id, "status_pill_lookup", value,
+                   "status_pill_added", None, {"value": value})
+    conn.commit()
+    flash(f"Added status pill “{value}”.", "ok")
+    return redirect(back)
 
 
 @bp.route("/rules/rerun", methods=["POST"])
