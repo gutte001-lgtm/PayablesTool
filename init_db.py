@@ -239,6 +239,9 @@ CREATE TABLE IF NOT EXISTS pay_run_line (
 );
 CREATE INDEX IF NOT EXISTS idx_payrunline_run  ON pay_run_line(pay_run_id);
 CREATE INDEX IF NOT EXISTS idx_payrunline_bill ON pay_run_line(qb_bill_id);
+-- Phase 4: a bill appears at most once per run (backstops the picker's claim
+-- filter against same-run duplicate lines).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payrunline_unique ON pay_run_line(pay_run_id, qb_bill_id);
 """
 
 # ===== Phase 3.5 -- follow-up workspace (status pills + bill tags) ==========

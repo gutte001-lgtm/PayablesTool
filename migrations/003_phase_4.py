@@ -3,12 +3,13 @@ migrations/003_phase_4.py -- one-shot, idempotent migration for Phase 4
 (pay-run builder). Same pattern as 001/002.
 
 The pay_run / pay_run_line tables already exist as stubs (Phase 1b). Phase 4
-only needs two new line-review columns on pay_run_line:
+adds two new line-review columns on pay_run_line plus one unique index:
   1. ADD COLUMN pay_run_line.reviewed_by_user_id INTEGER   (if missing)
   2. ADD COLUMN pay_run_line.reviewed_at         TEXT      (if missing)
+  3. CREATE UNIQUE INDEX idx_payrunline_unique (pay_run_id, qb_bill_id) (if missing)
 
-Idempotent: checks PRAGMA table_info before each ALTER (ADD COLUMN has no
-IF NOT EXISTS), prints what it did, exits 0. Re-running is a no-op.
+Idempotent: checks PRAGMA table_info / index_list before each change (ADD COLUMN
+has no IF NOT EXISTS), prints what it did, exits 0. Re-running is a no-op.
 
 Run (from the repo root), AFTER pausing OneDrive (AGENTS.md S8):
     python migrations/003_phase_4.py            # migrates ./payables.db
@@ -27,10 +28,15 @@ _NEW_COLUMNS = [
     ("reviewed_by_user_id", "INTEGER"),
     ("reviewed_at", "TEXT"),
 ]
+_UNIQUE_INDEX = "idx_payrunline_unique"
 
 
 def _columns(conn, table):
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def _indexes(conn, table):
+    return [r[1] for r in conn.execute(f"PRAGMA index_list({table})")]
 
 
 def migrate(db_path, verbose=True):
@@ -53,6 +59,17 @@ def migrate(db_path, verbose=True):
                 conn.execute(f"ALTER TABLE pay_run_line ADD COLUMN {name} {decl}")
                 actions[name] = "added"
                 say(f"pay_run_line.{name}: ADDED")
+        # One bill at most once per run. Safe to create: pay_run_line had no UI
+        # before Phase 4, so the live DB has no rows (let alone duplicates).
+        if _UNIQUE_INDEX in _indexes(conn, "pay_run_line"):
+            actions["unique_index"] = "already present"
+            say(f"{_UNIQUE_INDEX}: already present")
+        else:
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {_UNIQUE_INDEX} "
+                "ON pay_run_line(pay_run_id, qb_bill_id)")
+            actions["unique_index"] = "added"
+            say(f"{_UNIQUE_INDEX}: ADDED")
         conn.commit()
     finally:
         conn.close()

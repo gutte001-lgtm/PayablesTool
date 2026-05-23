@@ -154,6 +154,13 @@ def _cols(p, table):
     return out
 
 
+def _idx(p, table):
+    cn = sqlite3.connect(p)
+    out = [r[1] for r in cn.execute(f"PRAGMA index_list({table})")]
+    cn.close()
+    return out
+
+
 def legacy_db():
     """Pay_run_line WITHOUT the Phase 4 review columns -> simulates pre-Phase-4."""
     d = Path(tempfile.mkdtemp())
@@ -182,6 +189,8 @@ def test_migration_adds_columns():
     check("mig: reviewed_at added", a["reviewed_at"] == "added")
     check("mig: columns present after run",
           "reviewed_by_user_id" in _cols(p, "pay_run_line") and "reviewed_at" in _cols(p, "pay_run_line"))
+    check("mig: unique index added", a["unique_index"] == "added")
+    check("mig: unique index present after run", "idx_payrunline_unique" in _idx(p, "pay_run_line"))
     check("mig: not already_migrated on first run", a["already_migrated"] is False)
 
 
@@ -190,6 +199,7 @@ def test_migration_idempotent():
     mig.migrate(p, verbose=False)
     a2 = mig.migrate(p, verbose=False)
     check("mig: rerun already present", a2["reviewed_by_user_id"] == "already present")
+    check("mig: rerun unique index already present", a2["unique_index"] == "already present")
     check("mig: rerun flagged already_migrated", a2["already_migrated"] is True)
 
 
@@ -279,6 +289,17 @@ def test_claimed_bill_excluded():
     check("claimed: bill on another run is hidden", "C1" not in cands)
 
 
+def test_no_duplicate_line_same_run():
+    fresh_db()
+    seed_bill("DUP1", state="Controller_Reviewed")
+    rid = seed_run()
+    m = client("marilyn")
+    m.post(f"/pay-runs/{rid}/lines", data={"bill_ids": "DUP1"})
+    m.post(f"/pay-runs/{rid}/lines", data={"bill_ids": "DUP1"})  # second add is a no-op
+    check("dup: bill appears at most once per run",
+          scalar("SELECT COUNT(*) FROM pay_run_line WHERE pay_run_id=? AND qb_bill_id='DUP1'", (rid,)) == 1)
+
+
 # ======================================================================
 # Edit line
 # ======================================================================
@@ -291,18 +312,21 @@ def test_edit_line():
     client("marilyn").post(f"/pay-runs/{rid}/lines/{lid}",
                            data={"payment_method": "Wire", "amount_to_pay": "75.50", "included": "1"})
     check("edit: method set", scalar("SELECT payment_method FROM pay_run_line WHERE id=?", (lid,)) == "Wire")
-    check("edit: partial amount stored as cents", scalar("SELECT amount_to_pay_cents FROM pay_run_line WHERE id=?", (lid,)) == 7550)
+    check("edit: amount locked to full open balance (partials deferred)",
+          scalar("SELECT amount_to_pay_cents FROM pay_run_line WHERE id=?", (lid,)) == 10000)
 
 
-def test_edit_amount_over_balance():
+def test_amount_locked_to_open_balance():
     fresh_db()
     seed_bill("E2", state="Controller_Reviewed", open_balance=10000)
     rid = seed_run()
     lid = seed_payline(rid, "E2", amount=10000)
+    # v1 pays the full open balance; a posted partial/over amount is ignored.
     r = client("marilyn").post(f"/pay-runs/{rid}/lines/{lid}",
                                data={"payment_method": "Check", "amount_to_pay": "200", "included": "1"})
-    check("edit over-balance: 302+flash", r.status_code == 302)
-    check("edit over-balance: amount unchanged", scalar("SELECT amount_to_pay_cents FROM pay_run_line WHERE id=?", (lid,)) == 10000)
+    check("amount locked: 302 PRG", r.status_code == 302)
+    check("amount locked: stays full open balance",
+          scalar("SELECT amount_to_pay_cents FROM pay_run_line WHERE id=?", (lid,)) == 10000)
 
 
 def test_exclude_line_frees_bill():
@@ -364,6 +388,24 @@ def test_transition_wrong_state():
     r = client("shaun").post(f"/pay-runs/{rid}/advance", data={"action": "approve_cfo"})
     check("wrong state: approve_cfo from Draft -> 302+flash", r.status_code == 302)
     check("wrong state: status unchanged", scalar("SELECT status FROM pay_run WHERE id=?", (rid,)) == "Draft")
+
+
+def test_reject_all_then_block_advance():
+    # Reject the only line at the controller stage, approve the (now empty) run,
+    # then try to push it to the CFO -> blocked (payable_count == 0).
+    fresh_db()
+    seed_bill("RA1", state="Controller_Reviewed")
+    rid = seed_run(status="Submitted_to_Controller")
+    lid = seed_payline(rid, "RA1")
+    j = client("joe")
+    j.post(f"/pay-runs/{rid}/lines/{lid}/review", data={"action": "reject", "note": "drop it"})
+    j.post(f"/pay-runs/{rid}/advance", data={"action": "approve_controller"})
+    check("reject-all: -> Controller_Approved",
+          scalar("SELECT status FROM pay_run WHERE id=?", (rid,)) == "Controller_Approved")
+    r = j.post(f"/pay-runs/{rid}/advance", data={"action": "submit_cfo"})
+    check("reject-all: empty run blocked from CFO (302+flash)", r.status_code == 302)
+    check("reject-all: stays Controller_Approved",
+          scalar("SELECT status FROM pay_run WHERE id=?", (rid,)) == "Controller_Approved")
 
 
 # ======================================================================
@@ -492,10 +534,10 @@ TESTS = [
     test_migration_adds_columns, test_migration_idempotent, test_migration_noop_on_fresh,
     test_create_run, test_create_run_cfo_forbidden,
     test_candidate_pool_filters, test_candidate_flags, test_add_lines,
-    test_add_lines_not_draft, test_claimed_bill_excluded,
-    test_edit_line, test_edit_amount_over_balance, test_exclude_line_frees_bill,
+    test_add_lines_not_draft, test_claimed_bill_excluded, test_no_duplicate_line_same_run,
+    test_edit_line, test_amount_locked_to_open_balance, test_exclude_line_frees_bill,
     test_full_lifecycle, test_submit_empty_run_blocked, test_transition_wrong_role,
-    test_transition_wrong_state,
+    test_transition_wrong_state, test_reject_all_then_block_advance,
     test_controller_rejects_line, test_reject_requires_note, test_cfo_approves_line,
     test_review_wrong_role, test_review_wrong_state, test_rejected_line_frees_bill,
     test_grouping_and_totals, test_cfo_inbox_lists_submitted, test_detail_renders,

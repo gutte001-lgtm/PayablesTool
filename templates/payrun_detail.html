@@ -13,7 +13,7 @@
         <option value="">(set method)</option>
         {% for me in methods %}<option value="{{ me }}" {{ 'selected' if ln.payment_method==me }}>{{ me }}</option>{% endfor %}
       </select></td>
-  <td><input name="amount_to_pay" form="lf{{ ln.id }}" value="{{ '%.2f'|format((ln.amount_to_pay_cents or 0)/100) }}" style="width:90px"></td>
+  <td style="text-align:right" title="full open balance — partials deferred to Phase 5">{{ money(ln.open_balance_cents) }}</td>
   <td>
     <form id="lf{{ ln.id }}" method="post" action="{{ url_for('payruns.edit_line', run_id=run_id, line_id=ln.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>

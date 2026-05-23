@@ -11,7 +11,12 @@ run walks a lifecycle to the CFO and is locked:
 
 Controller and CFO can reject individual lines (with a note); a rejected or
 excluded line is not paid and frees its bill back into the next run's pool
-("push to next week"). Detail groups payable lines like the sample workbook:
+("push to next week"). The lifecycle is forward-only -- there is no reopen: to
+correct a submitted run, reject the bad lines and create a new run (revisit as
+Phase 4.5 if this proves painful). Partial payments are NOT supported in v1 --
+each line pays the bill's full open balance; partial-amount handling is deferred
+to Phase 5 (export + close-out). Detail groups payable lines like the sample
+workbook:
 a Contractor section (via the Phase 3.5 GL flag, bills.CONTRACTOR_GL_ACCOUNT_
 LEAF_NAMES) sub-grouped by payment method, then an Other section by method, with
 subtotals and a grand total. Per-app_category sections (Buys, Refunds, ...) need
@@ -38,10 +43,8 @@ from auth import role_required
 
 bp = Blueprint("payruns", __name__)
 
-# Lifecycle. Exported is reserved for Phase 5 (the Excel generation).
-RUN_STATES = ("Draft", "Submitted_to_Controller", "Controller_Approved",
-              "Submitted_to_CFO", "CFO_Approved", "Locked", "Exported")
-# action -> (from_state, to_state, allowed_roles)
+# action -> (from_state, to_state, allowed_roles). Forward-only; Locked is
+# terminal in Phase 4 and Exported is reserved for Phase 5 (the Excel export).
 TRANSITIONS = {
     "submit_controller": ("Draft", "Submitted_to_Controller", ("ap_clerk", "controller")),
     "approve_controller": ("Submitted_to_Controller", "Controller_Approved", ("controller",)),
@@ -68,16 +71,12 @@ def _run(conn, run_id):
     return conn.execute("SELECT * FROM pay_run WHERE id=?", (run_id,)).fetchone()
 
 
-def claimed_bill_ids(conn, exclude_run_id=None):
+def claimed_bill_ids(conn):
     """Bills already spoken for: an included, non-Rejected line on any run.
     Excluding/​rejecting a line releases the bill (that's "push to next week")."""
-    sql = ("SELECT DISTINCT qb_bill_id FROM pay_run_line "
-           "WHERE included=1 AND line_state<>'Rejected'")
-    params = ()
-    if exclude_run_id is not None:
-        sql += " AND pay_run_id<>?"
-        params = (exclude_run_id,)
-    return {r["qb_bill_id"] for r in conn.execute(sql, params)}
+    return {r["qb_bill_id"] for r in conn.execute(
+        "SELECT DISTINCT qb_bill_id FROM pay_run_line "
+        "WHERE included=1 AND line_state<>'Rejected'")}
 
 
 def candidate_bills(conn, run_id):
@@ -88,7 +87,9 @@ def candidate_bills(conn, run_id):
     today = date.today()
     contractor_ids = followup._contractor_bill_ids(conn)
     past_sla = {r["qb_bill_id"] for r in followup._section_past_sla(conn, today, contractor_ids)}
-    claimed = claimed_bill_ids(conn)            # claimed by ANY run (incl. this one's lines)
+    claimed = claimed_bill_ids(conn)            # actively claimed by ANY run
+    on_this_run = {r["qb_bill_id"] for r in conn.execute(
+        "SELECT qb_bill_id FROM pay_run_line WHERE pay_run_id=?", (run_id,))}
     excl = ",".join("?" * len(bills.CEO_EXCLUDED))
     rows = conn.execute(
         f"""SELECT b.qb_bill_id, b.vendor, b.bill_number, b.bill_date, b.due_date,
@@ -104,8 +105,8 @@ def candidate_bills(conn, run_id):
     tag_counts = tags.tag_counts_for_bills(conn, ids)
     out = []
     for r in rows:
-        if r["qb_bill_id"] in claimed:          # already on a run -> not selectable
-            continue
+        if r["qb_bill_id"] in claimed or r["qb_bill_id"] in on_this_run:
+            continue                            # claimed by another run / already on this run
         d = dict(r)
         d["is_contractor"] = r["qb_bill_id"] in contractor_ids
         d["past_sla"] = r["qb_bill_id"] in past_sla
@@ -163,21 +164,6 @@ def grouped_lines(conn, run_id):
         "payable_count": sum(1 for ln in lines if _payable(ln)),
         "line_count": len(lines),
     }
-
-
-def _parse_amount_cents(s, open_balance_cents):
-    s = (s or "").strip().replace(",", "").lstrip("$")
-    if not s:
-        return None, "Amount is required."
-    try:
-        cents = int(round(float(s) * 100))
-    except ValueError:
-        return None, "Amount must be a number."
-    if cents <= 0:
-        return None, "Amount must be positive."
-    if cents > open_balance_cents:
-        return None, "Amount can't exceed the bill's open balance."
-    return cents, None
 
 
 # ----------------------------------------------------------------------
@@ -266,22 +252,25 @@ def add_lines(run_id):
         return redirect(url_for("payruns.detail", run_id=run_id))
     eligible = {c["qb_bill_id"]: c for c in candidate_bills(conn, run_id)}
     now = sync._now_iso()
-    added = 0
+    added_ids = []
     for bid in wanted:
         c = eligible.get(bid)
         if not c:
             continue                            # not eligible (claimed/excluded/etc.)
-        conn.execute(
-            "INSERT INTO pay_run_line (pay_run_id, qb_bill_id, payment_method, "
+        # OR IGNORE: the UNIQUE(pay_run_id, qb_bill_id) index backstops a race
+        # where the same bill is added to this run twice (concurrent submits).
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO pay_run_line (pay_run_id, qb_bill_id, payment_method, "
             "amount_to_pay_cents, included, line_state) VALUES (?,?,?,?,1,'Pending')",
             (run_id, bid, c["proposed_payment_method"], c["open_balance_cents"]))
-        added += 1
-    if added:
+        if cur.rowcount:
+            added_ids.append(bid)
+    if added_ids:
         conn.execute("UPDATE pay_run SET updated_at=? WHERE id=?", (now, run_id))
         sync.log_audit(conn, current_user.id, "pay_run", run_id, "pay_run_lines_added",
-                       None, {"count": added})
+                       None, {"count": len(added_ids), "bill_ids": added_ids})
         conn.commit()
-    flash(f"Added {added} bill(s).", "ok")
+    flash(f"Added {len(added_ids)} bill(s).", "ok")
     return redirect(url_for("payruns.detail", run_id=run_id))
 
 
@@ -305,16 +294,17 @@ def edit_line(run_id, line_id):
         flash("Invalid payment method.", "error")
         return redirect(url_for("payruns.detail", run_id=run_id))
     included = 1 if request.form.get("included") else 0
-    amount_cents, err = _parse_amount_cents(request.form.get("amount_to_pay"),
-                                            line["open_balance_cents"])
-    if err:
-        flash(err, "error")
-        return redirect(url_for("payruns.detail", run_id=run_id))
+    # v1 pays the full open balance only; partials are deferred to Phase 5, so the
+    # amount is locked to the bill's open balance and any posted amount is ignored.
+    amount_cents = line["open_balance_cents"]
+    before = {"line_id": line_id, "payment_method": line["payment_method"],
+              "amount_to_pay_cents": line["amount_to_pay_cents"],
+              "included": line["included"]}
     conn.execute("UPDATE pay_run_line SET payment_method=?, amount_to_pay_cents=?, "
                  "included=? WHERE id=?", (method, amount_cents, included, line_id))
     conn.execute("UPDATE pay_run SET updated_at=? WHERE id=?", (sync._now_iso(), run_id))
     sync.log_audit(conn, current_user.id, "pay_run", run_id, "pay_run_line_updated",
-                   {"line_id": line_id},
+                   before,
                    {"payment_method": method, "amount_to_pay_cents": amount_cents,
                     "included": included})
     conn.commit()
@@ -382,14 +372,21 @@ def advance(run_id):
     if run["status"] != frm:
         flash(f"Can't {action.replace('_', ' ')} from {run['status']}.", "error")
         return redirect(url_for("payruns.detail", run_id=run_id))
-    # Guard: don't submit an empty run (no payable lines).
-    if action == "submit_controller":
+    # Guard: never carry an empty run (no payable lines) forward -- e.g. after all
+    # lines are rejected at the controller/CFO stage.
+    if action in ("submit_controller", "submit_cfo", "approve_cfo", "lock"):
         g = grouped_lines(conn, run_id)
         if g["payable_count"] == 0:
-            flash("Add at least one included bill before submitting.", "error")
+            flash("This run has no payable lines — add or re-include a bill first.", "error")
             return redirect(url_for("payruns.detail", run_id=run_id))
-    conn.execute("UPDATE pay_run SET status=?, updated_at=? WHERE id=?",
-                 (to, sync._now_iso(), run_id))
+    # Guarded write: only advance if the run is still in the expected state, so two
+    # concurrent transitions can't both fire (TOCTOU between the check above and here).
+    cur = conn.execute("UPDATE pay_run SET status=?, updated_at=? WHERE id=? AND status=?",
+                       (to, sync._now_iso(), run_id, frm))
+    if cur.rowcount == 0:
+        conn.rollback()
+        flash("This run just changed — refresh and try again.", "error")
+        return redirect(url_for("payruns.detail", run_id=run_id))
     sync.log_audit(conn, current_user.id, "pay_run", run_id, "pay_run_advanced",
                    {"status": frm}, {"status": to, "action": action})
     conn.commit()
