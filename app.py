@@ -8,6 +8,7 @@ connectivity. APScheduler is initialized but registers no jobs yet -- the
 """
 
 import os
+from datetime import date
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -15,6 +16,7 @@ from flask import Flask, jsonify, redirect, render_template, url_for
 from flask_login import current_user, login_required
 from flask_wtf import CSRFProtect
 
+import dates
 import db
 import tags
 from admin import init_admin
@@ -51,23 +53,42 @@ init_followup(app)
 
 
 @app.context_processor
-def inject_nav_tag_count():
-    """Phase 3.5: active-tag count for the current user, for the nav badge.
-    Recomputed every request (no caching). Defensive: if bill_tag doesn't exist
-    yet (live DB merged but migration not run), degrade to no badge rather than
-    500 every page."""
+def inject_nav_badges():
+    """Nav badges, recomputed every request (no caching): Phase 3.5 active-tag
+    count for the current user, Phase 3.6 total open items. Defensive: if a
+    table doesn't exist yet (live DB merged but migration not run), degrade to
+    no badge rather than 500 every page."""
     if not current_user.is_authenticated:
         return {}
+    out = {}
     try:
-        return {"nav_tag_count": tags.tag_count_for_user(db.get_db(), current_user.id)}
+        out["nav_tag_count"] = tags.tag_count_for_user(db.get_db(), current_user.id)
     except Exception:
-        return {"nav_tag_count": 0}
+        out["nav_tag_count"] = 0
+    try:
+        out["nav_open_items_count"] = tags.open_item_total(db.get_db())
+    except Exception:
+        out["nav_open_items_count"] = 0
+    return out
 
 
 @app.route("/")
 @login_required
 def index():
-    return render_template("index.html")
+    conn = db.get_db()
+    today = date.today()
+    try:
+        items = [dict(i) for i in tags.all_open_items(conn)]
+        ids = list({i["qb_bill_id"] for i in items})
+        tagmap = tags.active_tags_for_bills(conn, ids)
+        for i in items:
+            i["tags"] = tagmap.get(i["qb_bill_id"], [])
+            i["age_bd"] = dates.business_days_ago(i["created_at"], today)
+    except Exception:
+        items = []                          # pre-migration: degrade gracefully
+    return render_template(
+        "index.html", open_items=items,
+        can_edit=current_user.has_role("ap_clerk", "controller"))
 
 
 @app.route("/health")

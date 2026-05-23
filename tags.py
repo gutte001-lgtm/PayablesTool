@@ -202,3 +202,73 @@ def last_activity_for_bills(conn, ids):
             # only as a floor: keep the later of meta.created_at vs found activity
             out[r["qb_bill_id"]] = max(out.get(r["qb_bill_id"], ""), r["ts"])
     return out
+
+
+# ----------------------------------------------------------------------
+# Open items (Phase 3.6): explicit "this bill needs work" flags. Junction-style
+# like tags -- multiple per bill; resolved_at IS NULL = open.
+# ----------------------------------------------------------------------
+
+def create_open_item(conn, bill_id, description, created_by_user_id, now):
+    cur = conn.execute(
+        "INSERT INTO bill_open_item (qb_bill_id, description, created_by_user_id, "
+        "created_at) VALUES (?,?,?,?)",
+        (bill_id, description, created_by_user_id, now))
+    return cur.lastrowid
+
+
+def resolve_open_item(conn, item_id, bill_id, resolution_note, resolved_by_user_id, now):
+    """Resolve an OPEN item. Returns True if it flipped an open item to resolved,
+    False if it was already resolved / not found (the WHERE guards double-resolve)."""
+    cur = conn.execute(
+        "UPDATE bill_open_item SET resolved_at=?, resolved_by_user_id=?, "
+        "resolution_note=? WHERE id=? AND qb_bill_id=? AND resolved_at IS NULL",
+        (now, resolved_by_user_id, resolution_note, item_id, bill_id))
+    return cur.rowcount > 0
+
+
+def get_open_item(conn, item_id, bill_id):
+    return conn.execute(
+        "SELECT * FROM bill_open_item WHERE id=? AND qb_bill_id=?",
+        (item_id, bill_id)).fetchone()
+
+
+def open_items_for_bill(conn, bill_id):
+    """Unresolved items on one bill, oldest first, with creator name."""
+    return conn.execute(
+        "SELECT oi.*, u.name AS created_by_name FROM bill_open_item oi "
+        "LEFT JOIN users u ON u.id=oi.created_by_user_id "
+        "WHERE oi.qb_bill_id=? AND oi.resolved_at IS NULL ORDER BY oi.created_at",
+        (bill_id,)).fetchall()
+
+
+def all_open_items(conn):
+    """Every unresolved open item, oldest first (surfaces longest-ignored),
+    joined with bill facts + creator name + the bill's status pill."""
+    return conn.execute(
+        "SELECT oi.id, oi.qb_bill_id, oi.description, oi.created_at, "
+        "       u.name AS created_by_name, b.vendor, b.bill_number, "
+        "       b.amount_cents, b.open_balance_cents, m.status_pill "
+        "FROM bill_open_item oi "
+        "JOIN bill b ON b.qb_bill_id=oi.qb_bill_id "
+        "LEFT JOIN bill_metadata m ON m.qb_bill_id=oi.qb_bill_id "
+        "LEFT JOIN users u ON u.id=oi.created_by_user_id "
+        "WHERE oi.resolved_at IS NULL ORDER BY oi.created_at ASC").fetchall()
+
+
+def open_item_counts_for_bills(conn, ids):
+    """{qb_bill_id: open_item_count} for list/inbox row decoration (one query)."""
+    if not ids:
+        return {}
+    rows = conn.execute(
+        "SELECT qb_bill_id, COUNT(*) AS n FROM bill_open_item "
+        f"WHERE resolved_at IS NULL AND qb_bill_id IN ({_placeholders(ids)}) "
+        "GROUP BY qb_bill_id", tuple(ids)).fetchall()
+    return {r["qb_bill_id"]: r["n"] for r in rows}
+
+
+def open_item_total(conn):
+    """Total unresolved open items across all bills -- the home nav badge."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM bill_open_item WHERE resolved_at IS NULL"
+    ).fetchone()["n"]

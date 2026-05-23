@@ -13,6 +13,7 @@
       {% if can_edit %}
         <button type="button" id="showpill">Status…</button>
         <button type="button" id="showtag">Tag someone…</button>
+        <button type="button" id="showopenitem">Add open item…</button>
       {% endif %}
       {% if next_state %}
         {% if missing_required %}
@@ -70,11 +71,18 @@
       <button type="submit">Tag</button>
     </form>
   </div>
+  <div id="openitembox" class="editbox" style="display:none;">
+    <form method="post" action="{{ url_for('bills.create_open_item', bill_id=bill.qb_bill_id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="description" placeholder="What needs to happen?" style="min-width:300px;">
+      <button type="submit">Add open item</button>
+    </form>
+  </div>
   <script>
     (function(){
       function toggle(btn,box){var b=document.getElementById(btn),x=document.getElementById(box);
         if(b&&x){b.addEventListener('click',function(){x.style.display=(x.style.display==='flex'?'none':'flex');});}}
-      toggle('showpill','pillbox'); toggle('showtag','tagbox');
+      toggle('showpill','pillbox'); toggle('showtag','tagbox'); toggle('showopenitem','openitembox');
     })();
   </script>
   {% endif %}
@@ -175,6 +183,26 @@
   </form>
   {% else %}
   <p class="note">You have read-only access to this bill's metadata.</p>
+  {% endif %}
+
+  <!-- Phase 3.6: open items on this bill (unresolved only; hidden if none) -->
+  {% if open_items %}
+  <h2>Open Items on this bill</h2>
+  <ul class="log oi-list">
+    {% for i in open_items %}
+    <li>
+      <strong>{{ i.description }}</strong>
+      <span class="meta">— {{ i.created_by_name or 'system' }} &middot; {{ i.created_at }}</span>
+      {% if can_edit %}
+      <form method="post" action="{{ url_for('bills.resolve_open_item', bill_id=bill.qb_bill_id, item_id=i.id) }}" class="oi-resolve-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <textarea name="resolution_note" rows="1" required placeholder="Resolution note (required) — what was done?"></textarea>
+        <button type="submit" class="link-btn">Resolve</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
   {% endif %}
 
   <!-- Region 3: notes + todos -->

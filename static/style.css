@@ -133,3 +133,20 @@ tr.row-stale td { background: #fdf3f3; }
   border: 1px solid #f0e0c0; border-radius: 8px; }
 .tagged-section h2 { margin-top: 0; border: 0; }
 h2 .count { color: var(--muted); font-weight: 400; font-size: 14px; }
+h1 .count { color: var(--muted); font-weight: 400; font-size: 16px; }
+
+/* ===== Phase 3.6: open items =============================================== */
+.brand { color: inherit; text-decoration: none; }
+/* open-items home badge -- amber, to distinguish from the red tag badge */
+.navbadge.openitems { background: #b9770e; }
+/* the "what needs to happen" column is the point -- give it room */
+.oi-desc-col { width: 38%; }
+.oi-desc { white-space: pre-wrap; }
+/* inline resolve form (home table + detail list) */
+.oi-resolve-row td { background: #f7f9fb; }
+.oi-resolve-form { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; }
+.oi-resolve-form textarea { flex: 1; padding: 6px 8px; border: 1px solid var(--line);
+  border-radius: 6px; min-width: 220px; }
+.oi-resolve-form button { width: auto; margin: 0; }
+ul.oi-list li { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+ul.oi-list .oi-resolve-form { flex-basis: 100%; }

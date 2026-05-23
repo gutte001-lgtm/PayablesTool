@@ -1,6 +1,59 @@
 {% extends "base.html" %}
 {% block title %}Home &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
+
+<!-- Phase 3.6: Open Items -- explicit "this bill needs work", shared across the team -->
+<div class="card">
+  <h1>Open Items <span class="count">({{ open_items|length }})</span></h1>
+  <p class="note">Bills someone flagged as needing work — oldest first. Aging in
+     business days (<span class="age-warn">yellow ≥ 5</span>,
+     <span class="age-stale">red ≥ 10</span>). Resolve with a required note.</p>
+  {% if open_items %}
+  <table class="grid">
+    <tr>
+      <th>Vendor</th><th>Bill # / amount</th><th>Status</th>
+      <th class="oi-desc-col">What needs to happen</th>
+      <th>Raised</th><th>Tags</th>{% if can_edit %}<th></th>{% endif %}
+    </tr>
+    {% for i in open_items %}
+    {% set tint = 'age-stale' if i.age_bd >= 10 else ('age-warn' if i.age_bd >= 5 else '') %}
+    <tr>
+      <td><a href="{{ url_for('bills.detail', bill_id=i.qb_bill_id) }}">{{ i.vendor or '—' }}</a></td>
+      <td>{{ i.bill_number or '—' }}<br><span class="meta">{{ money(i.amount_cents) }}</span></td>
+      <td>{% if i.status_pill %}<span class="badge pill">{{ i.status_pill }}</span>{% else %}—{% endif %}</td>
+      <td class="oi-desc">{{ i.description }}</td>
+      <td><span class="{{ tint }}">{{ i.created_by_name or '—' }}, {{ i.age_bd }}d ago</span></td>
+      <td>{% if i.tags %}<span class="badge" title="active tags">🏷 {{ i.tags|length }}</span>{% else %}—{% endif %}</td>
+      {% if can_edit %}
+      <td><button type="button" class="link-btn oi-resolve-btn" data-target="resolve-{{ i.id }}">Resolve…</button></td>
+      {% endif %}
+    </tr>
+    {% if can_edit %}
+    <tr id="resolve-{{ i.id }}" class="oi-resolve-row" style="display:none;">
+      <td colspan="7">
+        <form method="post" action="{{ url_for('bills.resolve_open_item', bill_id=i.qb_bill_id, item_id=i.id) }}" class="oi-resolve-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <textarea name="resolution_note" rows="2" required placeholder="Resolution note (required) — what was done?"></textarea>
+          <button type="submit">Resolve open item</button>
+        </form>
+      </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="note">No open items. 🎉</p>
+  {% endif %}
+</div>
+{% if can_edit %}
+<script>
+(function(){document.querySelectorAll('.oi-resolve-btn').forEach(function(b){
+  b.addEventListener('click',function(){var r=document.getElementById(b.dataset.target);
+    if(r){r.style.display=(r.style.display==='table-row'?'none':'table-row');}});});})();
+</script>
+{% endif %}
+
 <div class="card">
   <h1>PayablesTool</h1>
   <p>Signed in as <strong>{{ current_user.name }}</strong>

@@ -229,10 +229,12 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
     # Phase 3.5: per-row active-tag count + business-days since last activity.
     page_ids = [d["qb_bill_id"] for d in bills]
     tag_counts = tags.tag_counts_for_bills(conn, page_ids)
+    open_item_counts = tags.open_item_counts_for_bills(conn, page_ids)
     activity = tags.last_activity_for_bills(conn, page_ids)
     today_d = date.today()
     for d in bills:
         d["tag_count"] = tag_counts.get(d["qb_bill_id"], 0)
+        d["open_item_count"] = open_item_counts.get(d["qb_bill_id"], 0)
         la = activity.get(d["qb_bill_id"])
         d["last_activity_bd"] = dates.business_days_ago(la, today_d) if la else None
 
@@ -346,6 +348,7 @@ def detail(bill_id):
         pills=tags.pill_values(conn),
         active_tags=tags.active_tags_for_bill(conn, bill_id),
         taggable_users=tags.active_users_excluding(conn, current_user.id),
+        open_items=tags.open_items_for_bill(conn, bill_id),
     )
 
 
@@ -675,6 +678,54 @@ def tag_clear(bill_id, tag_id):
                    {"tag_id": tag_id, "tagged_user_id": tag["tagged_user_id"]}, None)
     conn.commit()
     flash("Tag cleared.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+# ----------------------------------------------------------------------
+# Phase 3.6 -- open items. Explicit "this bill needs work" flag + description.
+# Metadata only (never gate approval). Required-resolution-note mirrors the
+# Phase 3 reject pattern: missing input -> 302 + flash, not 4xx.
+# ----------------------------------------------------------------------
+
+@bp.route("/bills/<bill_id>/open_items", methods=["POST"])
+@role_required("ap_clerk", "controller")
+def create_open_item(bill_id):
+    conn = db.get_db()
+    if not conn.execute("SELECT 1 FROM bill WHERE qb_bill_id=?", (bill_id,)).fetchone():
+        abort(404)
+    description = (request.form.get("description") or "").strip()
+    if not description:
+        flash("Description is required.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    item_id = tags.create_open_item(conn, bill_id, description, current_user.id,
+                                    sync._now_iso())
+    sync.log_audit(conn, current_user.id, "bill", bill_id, "open_item_created",
+                   None, {"open_item_id": item_id, "description": description})
+    conn.commit()
+    flash("Open item added.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+@bp.route("/bills/<bill_id>/open_items/<int:item_id>/resolve", methods=["POST"])
+@role_required("ap_clerk", "controller")
+def resolve_open_item(bill_id, item_id):
+    conn = db.get_db()
+    item = tags.get_open_item(conn, item_id, bill_id)
+    if not item:
+        abort(404)
+    note = (request.form.get("resolution_note") or "").strip()
+    if not note:
+        flash("Resolution note is required.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    if item["resolved_at"] is not None:
+        flash("That open item is already resolved.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    tags.resolve_open_item(conn, item_id, bill_id, note, current_user.id, sync._now_iso())
+    sync.log_audit(conn, current_user.id, "bill", bill_id, "open_item_resolved",
+                   {"open_item_id": item_id, "description": item["description"]},
+                   {"resolution_note": note})
+    conn.commit()
+    flash("Open item resolved.", "ok")
     return redirect(url_for("bills.detail", bill_id=bill_id))
 
 
