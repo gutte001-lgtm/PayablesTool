@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Pay Runs &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
+{% block content %}
+<div class="card">
+  <h1>Pay Runs</h1>
+  {% if can_create %}
+  <form method="post" action="{{ url_for('payruns.create_run') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="name" placeholder="Run name (optional)">
+    <label class="chk">Week ending <input type="date" name="week_ending"></label>
+    <button type="submit">New pay run</button>
+  </form>
+  {% endif %}
+  <table class="grid">
+    <tr><th>#</th><th>Name</th><th>Week ending</th><th>Status</th>
+        <th>Payable lines</th><th style="text-align:right">Total</th><th>Created by</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td><a href="{{ url_for('payruns.detail', run_id=r.id) }}">{{ r.name }}</a></td>
+      <td>{{ r.week_ending or '—' }}</td>
+      <td><span class="badge state">{{ r.status.replace('_', ' ') }}</span></td>
+      <td>{{ r.line_count }}</td>
+      <td style="text-align:right">{{ money(r.total_cents) }}</td>
+      <td>{{ r.created_by_name or '—' }}</td>
+    </tr>
+    {% else %}<tr><td colspan="7">No pay runs yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

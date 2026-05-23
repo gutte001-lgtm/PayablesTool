@@ -233,7 +233,9 @@ CREATE TABLE IF NOT EXISTS pay_run_line (
     amount_to_pay_cents  INTEGER,
     included            INTEGER NOT NULL DEFAULT 1,
     line_state          TEXT NOT NULL DEFAULT 'Pending',
-    cfo_note            TEXT
+    cfo_note            TEXT,
+    reviewed_by_user_id INTEGER REFERENCES users(id),  -- Phase 4: line approve/reject actor
+    reviewed_at         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_payrunline_run  ON pay_run_line(pay_run_id);
 CREATE INDEX IF NOT EXISTS idx_payrunline_bill ON pay_run_line(qb_bill_id);

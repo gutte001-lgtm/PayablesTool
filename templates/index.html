@@ -66,6 +66,7 @@
     {% if current_user.has_role('ap_clerk', 'controller') %}
       &middot; <a href="{{ url_for('bills.inbox') }}">Inbox</a>
       &middot; <a href="{{ url_for('followup.followup') }}">Follow-up</a>
+      &middot; <a href="{{ url_for('payruns.list_runs') }}">Pay Runs</a>
       &middot; <a href="{{ url_for('admin.sync_status') }}">Warehouse sync</a>
       &middot; <a href="{{ url_for('admin.rules') }}">Categorization rules</a>
     {% endif %}
