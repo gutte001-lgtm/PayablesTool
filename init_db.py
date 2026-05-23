@@ -268,6 +268,28 @@ CREATE INDEX IF NOT EXISTS idx_billtag_bill ON bill_tag(qb_bill_id, cleared_at);
 
 SCHEMA = SCHEMA + PHASE_3_5_SCHEMA
 
+# ===== Phase 3.6 -- open items (explicit "this bill needs work") ============
+# A boolean-ish flag (a row = an open item) + free-text description on any bill.
+# Junction-style like bill_tag: multiple open items per bill; resolved_at IS NULL
+# means open. Reused by migrations/002_phase_3_6.py (all IF NOT EXISTS).
+PHASE_3_6_SCHEMA = """
+CREATE TABLE IF NOT EXISTS bill_open_item (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    qb_bill_id          TEXT    NOT NULL REFERENCES bill(qb_bill_id),
+    description         TEXT    NOT NULL,   -- "what needs to happen"
+    created_by_user_id  INTEGER NOT NULL REFERENCES users(id),
+    created_at          TEXT    NOT NULL,
+    resolved_at         TEXT,               -- NULL = open
+    resolved_by_user_id INTEGER REFERENCES users(id),
+    resolution_note     TEXT                -- required when resolving (UI-enforced)
+);
+-- per-bill display; global open-list query.
+CREATE INDEX IF NOT EXISTS idx_openitem_bill ON bill_open_item(qb_bill_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_openitem_open ON bill_open_item(resolved_at, created_at);
+"""
+
+SCHEMA = SCHEMA + PHASE_3_6_SCHEMA
+
 # Seed status pills (is_seed=1). Shared by init_db (fresh DB) and the migration.
 SEED_PILLS = ("Waiting on Vendor", "Waiting on Approver", "In Review", "Blocked")
 

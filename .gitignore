@@ -9,6 +9,8 @@ payables.db
 payables.db-journal
 payables.db-wal
 payables.db-shm
+# pre-migration backups Joe takes before running migrations
+payables.db.bak*
 
 # Secrets — never commit
 .env

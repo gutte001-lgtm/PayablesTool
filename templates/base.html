@@ -8,7 +8,8 @@
 </head>
 <body>
   <header class="topbar">
-    <span class="brand">PayablesTool</span>
+    <a class="brand" href="{{ url_for('index') }}">PayablesTool{% if nav_open_items_count %}
+      <span class="navbadge openitems" title="{{ nav_open_items_count }} open item(s) across all bills">{{ nav_open_items_count }}</span>{% endif %}</a>
     {% if current_user.is_authenticated %}
       <nav class="topnav">
         <a href="{{ url_for('bills.list_bills') }}">Bills</a>

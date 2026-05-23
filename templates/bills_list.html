@@ -92,6 +92,7 @@
         <th>Class</th>
         <th>{{ sortlink('approval_state','State') }}</th>
         <th>Status</th>
+        <th>Open</th>
         <th>Due status</th>
         <th>Last activity</th>
         <th>OPS</th>
@@ -110,13 +111,14 @@
         <td>{{ b.classification or '—' }}</td>
         <td>{{ b.approval_state or '—' }}</td>
         <td>{% if b.status_pill %}<span class="badge pill">{{ b.status_pill }}</span>{% else %}—{% endif %}</td>
+        <td>{% if b.open_item_count %}<a href="{{ url_for('bills.detail', bill_id=b.qb_bill_id) }}" class="badge warn" title="open items">{{ b.open_item_count }}</a>{% else %}—{% endif %}</td>
         <td>{{ b.due_status }}</td>
         <td>{% if b.last_activity_bd is not none %}<span class="{{ 'age-stale' if b.last_activity_bd >= 10 else ('age-warn' if b.last_activity_bd >= 5 else '') }}">{{ b.last_activity_bd }}d ago</span>{% else %}—{% endif %}</td>
         <td>{% if b.ops_number and jira_base %}<a href="{{ jira_base }}/{{ b.ops_number }}" target="_blank" rel="noopener">{{ b.ops_number }}</a>{% else %}{{ b.ops_number or '—' }}{% endif %}</td>
         <td>{% if b.rush_flag %}<span class="badge rush">⚡</span>{% endif %}{% if b.ok_for_ceo %}<span class="badge ceo">CEO</span>{% endif %}{% if b.tag_count %}<span class="badge" title="active tags">🏷 {{ b.tag_count }}</span>{% endif %}{% if b.app_category=='Uncategorized' %}<span class="badge warn">?</span>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="15">No bills match.</td></tr>
+      <tr><td colspan="16">No bills match.</td></tr>
       {% endfor %}
     </table>
 
