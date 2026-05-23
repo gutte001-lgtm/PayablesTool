@@ -29,7 +29,9 @@ from flask import (Blueprint, abort, flash, redirect, render_template,
 from flask_login import current_user, login_required
 
 import db
+import dates
 import sync
+import tags
 from auth import role_required
 
 bp = Blueprint("bills", __name__)
@@ -43,6 +45,40 @@ METHODS = ("Check", "Wire", "Credit Card", "ACH")
 REQUIRED_FOR_AP = (("classification", "classification"), ("approver_name", "approver"),
                    ("approval_channel", "approval channel"), ("approval_date", "approval date"))
 REJECT_NOTE_PREFIX = "⮌ Rejected: "
+
+# Phase 3.5 follow-up: a bill is a "contractor bill" if ANY of its bill_line
+# rows hits one of these GL accounts (vendors paid out of Service & Training
+# COGS). Contractor bills get a tighter 14-day SLA. These four leaf names are
+# the "53xxx Service & Training COGS" family, discovered from the warehouse's
+# reporting.dim_account view (2026-05-22). EDIT POINT if the chart of accounts
+# changes: re-run the dim_account lookup (account name/path LIKE training/service
+# + cogs) and update this list. We match on the LEAF account name, not the
+# parsed number, because reporting.fact_bill_line returns the same account in
+# two formats -- a numbered path AND a name-only form whose gl_account_number is
+# NULL -- so number-only matching would silently drop the name-only lines.
+CONTRACTOR_GL_ACCOUNT_LEAF_NAMES = frozenset({
+    "Service and Repair COGS",            # 53100
+    "Training COGS",                      # 53200
+    "Service COGS - MET Reimbursements",  # 53300
+    "Training COGS - MET Reimbursements", # 53400
+})
+
+
+def _account_leaf(name):
+    """Leaf of a GL account name: last ':'-segment, with any leading numeric
+    code token stripped ('53200 ... :Training COGS' -> 'Training COGS';
+    'Training COGS' -> 'Training COGS')."""
+    if not name:
+        return ""
+    seg = str(name).split(":")[-1].strip()
+    head, _, rest = seg.partition(" ")
+    if head.isdigit() and rest:
+        seg = rest.strip()
+    return seg
+
+
+def is_contractor_account_name(name):
+    return _account_leaf(name) in CONTRACTOR_GL_ACCOUNT_LEAF_NAMES
 SORTS = {  # ?sort= -> SQL column
     "vendor": "b.vendor", "bill_number": "b.bill_number", "bill_date": "b.bill_date",
     "due_date": "b.due_date", "amount": "b.amount_cents",
@@ -150,7 +186,8 @@ def _split_count(breakdown_json):
 # List + inbox
 # ----------------------------------------------------------------------
 
-def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None):
+def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None,
+                 tagged_bills=None):
     today = date.today().isoformat()
     where, params, state = _build_filters(args)
 
@@ -170,7 +207,8 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
         f"""SELECT b.qb_bill_id, b.vendor, b.bill_number, b.bill_date, b.due_date,
                    b.amount_cents, b.open_balance_cents, b.is_paid,
                    m.app_category, m.app_category_breakdown, m.classification,
-                   m.approval_state, m.ops_number, m.rush_flag, m.ok_for_ceo
+                   m.approval_state, m.ops_number, m.rush_flag, m.ok_for_ceo,
+                   m.status_pill
             FROM bill b LEFT JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
             WHERE {where}
             ORDER BY {sort_col} {direction}, b.qb_bill_id
@@ -188,6 +226,16 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
         d["split"] = _split_count(r["app_category_breakdown"]) > 1
         bills.append(d)
 
+    # Phase 3.5: per-row active-tag count + business-days since last activity.
+    page_ids = [d["qb_bill_id"] for d in bills]
+    tag_counts = tags.tag_counts_for_bills(conn, page_ids)
+    activity = tags.last_activity_for_bills(conn, page_ids)
+    today_d = date.today()
+    for d in bills:
+        d["tag_count"] = tag_counts.get(d["qb_bill_id"], 0)
+        la = activity.get(d["qb_bill_id"])
+        d["last_activity_bd"] = dates.business_days_ago(la, today_d) if la else None
+
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     # filter-only params (no sort/dir/page) for building sort + pagination links
     fparams = {k: v for k in ("status", "classification", "app_category",
@@ -200,6 +248,7 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
         classifications=CLASSIFICATIONS, can_edit=current_user.has_role("ap_clerk", "controller"),
         jira_base=_jira_base(), locked=locked or {},
         endpoint=base_endpoint, fparams=fparams,
+        tagged_bills=tagged_bills or [],
     )
 
 
@@ -221,7 +270,8 @@ def inbox():
         args["approval_state"] = "New"
         args["status"] = args.get("status", "open")
         return _render_list(args, title="Inbox — New (your queue)",
-                            base_endpoint="bills.inbox", locked={"approval_state": "New"})
+                            base_endpoint="bills.inbox", locked={"approval_state": "New"},
+                            tagged_bills=tags.tagged_bills_for_user(db.get_db(), current_user.id))
     flash("Inbox is for AP clerks and the controller.", "error")
     return redirect(url_for("bills.list_bills"))
 
@@ -234,7 +284,8 @@ def inbox_controller():
     args["status"] = args.get("status", "open")
     return _render_list(args, title="Inbox — Controller (AP Reviewed)",
                         base_endpoint="bills.inbox_controller",
-                        locked={"approval_state": "AP_Reviewed"})
+                        locked={"approval_state": "AP_Reviewed"},
+                        tagged_bills=tags.tagged_bills_for_user(db.get_db(), current_user.id))
 
 
 @bp.route("/inbox/cfo")
@@ -279,6 +330,11 @@ def detail(bill_id):
     cur_state = meta["approval_state"] if meta else "New"
     missing_required = _missing_required(meta) if cur_state == "New" else []
     can_reject = current_user.has_role("controller") and cur_state == "AP_Reviewed"
+    # Phase 3.5: relative age per note (yellow >=5 BD, red >=10 BD), status pill
+    # dropdown values, active tag chips, and the tag-someone dropdown.
+    today_d = date.today()
+    notes = [{**dict(n), "age_bd": dates.business_days_ago(n["created_at"], today_d)}
+             for n in notes]
     return render_template(
         "bill_detail.html", bill=bill, meta=meta, lines=lines, notes=notes,
         todos=todos, audit=audit, breakdown=breakdown,
@@ -287,6 +343,9 @@ def detail(bill_id):
         jira_base=_jira_base(), next_state=_next_state(meta),
         missing_required=missing_required, can_reject=can_reject,
         reject_prefix=REJECT_NOTE_PREFIX,
+        pills=tags.pill_values(conn),
+        active_tags=tags.active_tags_for_bill(conn, bill_id),
+        taggable_users=tags.active_users_excluding(conn, current_user.id),
     )
 
 
@@ -447,11 +506,35 @@ def add_note(bill_id):
     conn = db.get_db()
     if not conn.execute("SELECT 1 FROM bill WHERE qb_bill_id=?", (bill_id,)).fetchone():
         abort(404)
-    conn.execute("INSERT INTO note (qb_bill_id, user_id, body, created_at) VALUES (?,?,?,?)",
-                 (bill_id, current_user.id, body, sync._now_iso()))
+    cur = conn.execute(
+        "INSERT INTO note (qb_bill_id, user_id, body, created_at) VALUES (?,?,?,?)",
+        (bill_id, current_user.id, body, sync._now_iso()))
+    mentioned = _tag_mentions(conn, bill_id, body, cur.lastrowid)
     conn.commit()
-    flash("Note added.", "ok")
+    msg = "Note added."
+    if mentioned:
+        msg += " Tagged " + ", ".join(mentioned) + "."
+    flash(msg, "ok")
     return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+def _tag_mentions(conn, bill_id, body, note_id):
+    """Phase 3.5: scan a note body for @username tokens and create an active
+    bill_tag for each matching active user. Skips the note author (self-mentions
+    are no-ops) and users who already have an active tag on this bill (no
+    duplicate). Unknown @handles are ignored. Returns the list of tagged names."""
+    tagged = []
+    for uname in tags.parse_mentions(body):
+        u = tags.active_user_by_username(conn, uname)
+        if not u or u["id"] == current_user.id or tags.has_active_tag(conn, bill_id, u["id"]):
+            continue
+        tags.insert_tag(conn, bill_id, u["id"], current_user.id, sync._now_iso(),
+                        note="via @mention in note #%d" % note_id)
+        sync.log_audit(conn, current_user.id, "bill", bill_id,
+                       "bill_tagged_via_mention", None,
+                       {"tagged_user_id": u["id"], "note_id": note_id})
+        tagged.append(u["name"])
+    return tagged
 
 
 @bp.route("/bills/<bill_id>/todos", methods=["POST"])
@@ -513,6 +596,86 @@ def bulk_classify():
     conn.commit()
     flash(f"Classified {n} bill(s) as {classification}.", "ok")
     return redirect(request.referrer or url_for("bills.list_bills"))
+
+
+# ----------------------------------------------------------------------
+# Phase 3.5 -- status pills + tags. Metadata only: these never gate the
+# Phase 3 approval state machine. PRG contract (302 + flash) matches Phase 3.
+# ----------------------------------------------------------------------
+
+@bp.route("/bills/<bill_id>/status_pill", methods=["POST"])
+@role_required("ap_clerk", "controller")
+def set_status_pill(bill_id):
+    conn = db.get_db()
+    meta = conn.execute("SELECT status_pill FROM bill_metadata WHERE qb_bill_id=?",
+                        (bill_id,)).fetchone()
+    if not meta:
+        abort(404)
+    value = (request.form.get("value") or "").strip()    # "" = clear
+    if value and not tags.pill_exists(conn, value):
+        flash("Unknown status pill — add it to the list first.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    new, old = (value or None), meta["status_pill"]
+    if new == old:
+        flash("Status pill unchanged.", "ok")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    conn.execute("UPDATE bill_metadata SET status_pill=?, updated_at=? WHERE qb_bill_id=?",
+                 (new, sync._now_iso(), bill_id))
+    sync.log_audit(conn, current_user.id, "bill_metadata", bill_id, "status_pill_set",
+                   {"status_pill": old}, {"status_pill": new})
+    conn.commit()
+    flash("Status pill cleared." if new is None else f"Status set to “{new}”.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+@bp.route("/bills/<bill_id>/tag", methods=["POST"])
+@role_required("ap_clerk", "controller")
+def tag_create(bill_id):
+    conn = db.get_db()
+    if not conn.execute("SELECT 1 FROM bill WHERE qb_bill_id=?", (bill_id,)).fetchone():
+        abort(404)
+    try:
+        uid = int((request.form.get("user_id") or "").strip())
+    except ValueError:
+        flash("Pick someone to tag.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    note = (request.form.get("note") or "").strip() or None
+    if uid == current_user.id:
+        flash("You can't tag yourself.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    u = tags.active_user(conn, uid)
+    if not u:
+        flash("Unknown or inactive user.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    if tags.has_active_tag(conn, bill_id, uid):
+        flash(f"{u['name']} already has an active tag on this bill.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    tag_id = tags.insert_tag(conn, bill_id, uid, current_user.id, sync._now_iso(), note)
+    sync.log_audit(conn, current_user.id, "bill", bill_id, "bill_tagged",
+                   None, {"tag_id": tag_id, "tagged_user_id": uid, "note": note})
+    conn.commit()
+    flash(f"Tagged {u['name']}.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+@bp.route("/bills/<bill_id>/tag/<int:tag_id>/clear", methods=["POST"])
+@login_required
+def tag_clear(bill_id, tag_id):
+    # Tags clear ONLY on explicit "mark done" -- never on view or action.
+    # Allowed: the tagged user themselves OR any controller (stale-tag cleanup).
+    conn = db.get_db()
+    tag = tags.get_active_tag(conn, tag_id, bill_id)
+    if not tag:
+        abort(404)
+    if not (tag["tagged_user_id"] == current_user.id
+            or current_user.has_role("controller")):
+        abort(403)
+    tags.clear_tag(conn, tag_id, current_user.id, sync._now_iso())
+    sync.log_audit(conn, current_user.id, "bill", bill_id, "bill_tag_cleared",
+                   {"tag_id": tag_id, "tagged_user_id": tag["tagged_user_id"]}, None)
+    conn.commit()
+    flash("Tag cleared.", "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
 
 
 # ----------------------------------------------------------------------

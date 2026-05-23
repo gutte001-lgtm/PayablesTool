@@ -11,6 +11,30 @@
   {% if locked.approval_state %}<p class="note">Showing only bills at
      <code>{{ locked.approval_state }}</code> (your queue).</p>{% endif %}
 
+  {% if tagged_bills %}
+  <div class="tagged-section">
+    <h2>🏷 Tagged for you ({{ tagged_bills|length }})</h2>
+    <table class="grid">
+      <tr><th>Vendor</th><th>Bill #</th><th style="text-align:right">Open</th>
+          <th>State</th><th>Status</th><th>Tagged by</th><th>Note</th><th></th></tr>
+      {% for b in tagged_bills %}
+      <tr>
+        <td><a href="{{ url_for('bills.detail', bill_id=b.qb_bill_id) }}">{{ b.vendor or '—' }}</a></td>
+        <td>{{ b.bill_number or '—' }}</td>
+        <td style="text-align:right">{{ money(b.open_balance_cents) }}</td>
+        <td>{{ b.approval_state or '—' }}</td>
+        <td>{% if b.status_pill %}<span class="badge pill">{{ b.status_pill }}</span>{% else %}—{% endif %}</td>
+        <td>{{ b.tagged_by_name or '—' }}</td>
+        <td>{{ b.tag_note or '—' }}</td>
+        <td><form method="post" action="{{ url_for('bills.tag_clear', bill_id=b.qb_bill_id, tag_id=b.tag_id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-btn" title="clears the tag">mark done</button></form></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
   <div class="kpis">
     <div class="kpi"><span>Total open</span><b>{{ money(kpis.total_cents) }}</b><em>{{ kpis.total_n }} bills</em></div>
     <div class="kpi"><span>Current (due now)</span><b>{{ money(kpis.current_cents) }}</b><em>{{ kpis.current_n }} bills</em></div>
@@ -67,7 +91,9 @@
         <th>{{ sortlink('app_category','Category') }}</th>
         <th>Class</th>
         <th>{{ sortlink('approval_state','State') }}</th>
+        <th>Status</th>
         <th>Due status</th>
+        <th>Last activity</th>
         <th>OPS</th>
         <th>Flags</th>
       </tr>
@@ -83,12 +109,14 @@
         <td>{{ b.app_category or '—' }}{% if b.split %} <span class="badge" title="multiple categories">split</span>{% endif %}</td>
         <td>{{ b.classification or '—' }}</td>
         <td>{{ b.approval_state or '—' }}</td>
+        <td>{% if b.status_pill %}<span class="badge pill">{{ b.status_pill }}</span>{% else %}—{% endif %}</td>
         <td>{{ b.due_status }}</td>
+        <td>{% if b.last_activity_bd is not none %}<span class="{{ 'age-stale' if b.last_activity_bd >= 10 else ('age-warn' if b.last_activity_bd >= 5 else '') }}">{{ b.last_activity_bd }}d ago</span>{% else %}—{% endif %}</td>
         <td>{% if b.ops_number and jira_base %}<a href="{{ jira_base }}/{{ b.ops_number }}" target="_blank" rel="noopener">{{ b.ops_number }}</a>{% else %}{{ b.ops_number or '—' }}{% endif %}</td>
-        <td>{% if b.rush_flag %}<span class="badge rush">⚡</span>{% endif %}{% if b.ok_for_ceo %}<span class="badge ceo">CEO</span>{% endif %}{% if b.app_category=='Uncategorized' %}<span class="badge warn">?</span>{% endif %}</td>
+        <td>{% if b.rush_flag %}<span class="badge rush">⚡</span>{% endif %}{% if b.ok_for_ceo %}<span class="badge ceo">CEO</span>{% endif %}{% if b.tag_count %}<span class="badge" title="active tags">🏷 {{ b.tag_count }}</span>{% endif %}{% if b.app_category=='Uncategorized' %}<span class="badge warn">?</span>{% endif %}</td>
       </tr>
       {% else %}
-      <tr><td colspan="13">No bills match.</td></tr>
+      <tr><td colspan="15">No bills match.</td></tr>
       {% endfor %}
     </table>
 

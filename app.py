@@ -16,9 +16,11 @@ from flask_login import current_user, login_required
 from flask_wtf import CSRFProtect
 
 import db
+import tags
 from admin import init_admin
 from auth import init_auth
 from bills import init_bills
+from followup import init_followup
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -45,6 +47,21 @@ db.init_app(app)
 init_auth(app)
 init_admin(app)
 init_bills(app)
+init_followup(app)
+
+
+@app.context_processor
+def inject_nav_tag_count():
+    """Phase 3.5: active-tag count for the current user, for the nav badge.
+    Recomputed every request (no caching). Defensive: if bill_tag doesn't exist
+    yet (live DB merged but migration not run), degrade to no badge rather than
+    500 every page."""
+    if not current_user.is_authenticated:
+        return {}
+    try:
+        return {"nav_tag_count": tags.tag_count_for_user(db.get_db(), current_user.id)}
+    except Exception:
+        return {"nav_tag_count": 0}
 
 
 @app.route("/")

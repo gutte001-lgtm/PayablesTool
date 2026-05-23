@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Follow-up &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
+
+{% macro commonhdr() %}
+  <th>Vendor</th><th>Bill #</th><th style="text-align:right">Amount</th>
+  <th style="text-align:right">Open</th><th>State</th><th>Status</th>
+  <th>Last activity</th><th>Tags</th>
+{% endmacro %}
+
+{% macro commoncells(b) %}
+  <td><a href="{{ url_for('bills.detail', bill_id=b.qb_bill_id) }}">{{ b.vendor or '—' }}</a></td>
+  <td>{{ b.bill_number or '—' }}</td>
+  <td style="text-align:right">{{ money(b.amount_cents) }}</td>
+  <td style="text-align:right">{{ money(b.open_balance_cents) }}</td>
+  <td>{{ b.approval_state or '—' }}</td>
+  <td>{% if b.status_pill %}<span class="badge pill">{{ b.status_pill }}</span>{% else %}—{% endif %}</td>
+  <td>{% if b.last_activity_bd is not none %}<span class="{{ 'age-stale' if b.last_activity_bd >= 10 else ('age-warn' if b.last_activity_bd >= 5 else '') }}">{{ b.last_activity_bd }}d ago</span>{% else %}—{% endif %}</td>
+  <td>{% for t in b.tags %}<span class="chip-sm">🏷 {{ t.tagged_user_name }}</span> {% else %}—{% endfor %}</td>
+{% endmacro %}
+
+{% block content %}
+<div class="card">
+  <h1>Follow-up</h1>
+  <p class="note">Stuck bills, surfaced four ways. A bill can show up in more than
+     one section — that's intentional. Aging is in business days
+     (<span class="age-warn">yellow ≥ 5</span>, <span class="age-stale">red ≥ 10</span>).</p>
+
+  <h2>Past SLA <span class="count">({{ past_sla|length }})</span></h2>
+  <p class="note">Contractor bills (Service &amp; Training COGS lines) are due at bill
+     date + 14 days; everyone else at the due date.</p>
+  <table class="grid">
+    <tr>{{ commonhdr() }}<th>Why</th></tr>
+    {% for b in past_sla %}
+    <tr>{{ commoncells(b) }}<td>{{ b.sla_reason }}</td></tr>
+    {% else %}<tr><td colspan="9">Nothing past SLA. 🎉</td></tr>{% endfor %}
+  </table>
+
+  <h2>Stale activity <span class="count">({{ stale|length }})</span></h2>
+  <p class="note">Open bills with no note or audit activity for ≥ 5 business days.</p>
+  <table class="grid">
+    <tr>{{ commonhdr() }}</tr>
+    {% for b in stale %}
+    <tr class="{{ 'row-stale' if b.last_activity_bd >= 10 else 'row-warn' }}">{{ commoncells(b) }}</tr>
+    {% else %}<tr><td colspan="8">No stale bills.</td></tr>{% endfor %}
+  </table>
+
+  <h2>Open to-dos <span class="count">({{ open_todos|length }})</span></h2>
+  <table class="grid">
+    <tr>{{ commonhdr() }}<th>Open to-dos</th></tr>
+    {% for b in open_todos %}
+    <tr>{{ commoncells(b) }}<td>{{ b.open_todos }}</td></tr>
+    {% else %}<tr><td colspan="9">No open to-dos.</td></tr>{% endfor %}
+  </table>
+
+  <h2>In process (tagged) <span class="count">({{ in_process|length }})</span></h2>
+  <p class="note">Bills someone is actively chasing (at least one active tag).</p>
+  <table class="grid">
+    <tr>{{ commonhdr() }}</tr>
+    {% for b in in_process %}
+    <tr>{{ commoncells(b) }}</tr>
+    {% else %}<tr><td colspan="8">Nothing tagged in process.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

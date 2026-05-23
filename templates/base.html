@@ -10,6 +10,16 @@
   <header class="topbar">
     <span class="brand">PayablesTool</span>
     {% if current_user.is_authenticated %}
+      <nav class="topnav">
+        <a href="{{ url_for('bills.list_bills') }}">Bills</a>
+        {% if current_user.has_role('ap_clerk', 'controller') %}
+          <a href="{{ url_for('bills.inbox') }}">Inbox{% if nav_tag_count %}
+            <span class="navbadge" title="{{ nav_tag_count }} active tag(s) for you">{{ nav_tag_count }}</span>{% endif %}</a>
+          <a href="{{ url_for('followup.followup') }}">Follow-up</a>
+        {% elif current_user.has_role('cfo') %}
+          <a href="{{ url_for('bills.inbox_cfo') }}">Inbox</a>
+        {% endif %}
+      </nav>
       <span class="who">{{ current_user.name }} &middot; {{ current_user.role }}</span>
       <a class="logout" href="{{ url_for('auth.logout') }}">Sign out</a>
     {% endif %}
