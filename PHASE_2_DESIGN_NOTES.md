@@ -19,7 +19,9 @@ verify they match *this sequence*, not just that fields save in isolation.
 
 ## Marilyn's daily workflow (the sequence to verify against)
 
-1. **Open the app → land on Home.** Sees nav: Inbox, Bills, Sync, Rules.
+1. **Open the app → land on Home.** Top nav (as shipped): Bills, Inbox,
+   Follow-up, Pay Runs. Warehouse sync and Categorization rules are reachable
+   from the home-page links rather than the top nav.
 2. **Click Inbox (`/inbox`).** Auto-scoped to her queue: bills at
    `approval_state='New'` (newly synced, not yet reviewed). She is *not*
    filtering 239 bills — she sees only what needs her.

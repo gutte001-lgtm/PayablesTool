@@ -58,6 +58,14 @@
         <button type="submit">{{ next_action.action.replace('_', ' ')|title }} &rarr; {{ next_action.to.replace('_', ' ') }}</button>
       </form>
       {% endif %}
+      {% if run.status == 'Locked' %}
+        {% if current_user.has_role('controller', 'cfo') %}
+        <a class="link-btn" href="{{ url_for('exports.export_cfo', run_id=run.id) }}">⬇ CFO Excel</a>
+        {% endif %}
+        {% if current_user.has_role('cfo') %}
+        <a class="link-btn" href="{{ url_for('exports.export_ceo', run_id=run.id) }}">⬇ CEO Excel</a>
+        {% endif %}
+      {% endif %}
     </div>
   </div>
   <p class="note">Week ending {{ run.week_ending or '—' }} &middot; created by {{ run.created_by_name or '—' }}

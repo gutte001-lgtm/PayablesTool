@@ -3,7 +3,8 @@ auth.py -- authentication for PayablesTool.
 
 Real login via Flask-Login (a departure from CloseTool, whose login is a
 no-op). The /login form is CSRF-protected via Flask-WTF. A role_required
-decorator is provided for later phases; Phase 0 only needs login_required.
+decorator gates routes by role; it's used across the bills, admin, payruns,
+and followup blueprints.
 
 init_auth(app) wires the LoginManager and registers the blueprint, keeping
 app.py free of circular imports.
@@ -83,8 +84,9 @@ def logout():
 
 
 def role_required(*roles):
-    """Gate a route to one or more roles. Phase 0 doesn't use it yet, but the
-    approval workflow (Phase 3+) will."""
+    """Gate a route to one or more roles. Used throughout the bills, admin,
+    payruns, and followup blueprints (e.g. the approval workflow and pay-run
+    actions)."""
     def decorator(f):
         @wraps(f)
         @login_required

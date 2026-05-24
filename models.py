@@ -1,9 +1,10 @@
 """
 models.py -- domain row helpers.
 
-Phase 0 has one entity: User. It's a thin wrapper over a sqlite3.Row that
-also satisfies Flask-Login's UserMixin contract. Later phases add Bill,
-BillMetadata, PayRun, etc. as their own helpers here (still raw sqlite3).
+User is the one entity with a helper class here: a thin wrapper over a
+sqlite3.Row that also satisfies Flask-Login's UserMixin contract. Other
+entities (Bill, BillMetadata, PayRun, etc.) are accessed as raw sqlite3 rows
+directly in their blueprints rather than wrapped here.
 """
 
 from flask_login import UserMixin

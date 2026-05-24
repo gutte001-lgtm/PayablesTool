@@ -1,5 +1,11 @@
 # Phase 1a — Warehouse discovery: how to run
 
+> **Status: discovery already completed (2026-05-22).**
+> [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md) is authored from that run and the
+> sync (`sync.py`) is live. Re-run this probe only if the boss changes the
+> `QuickBooksReplica` schema (column renames, new tables) and the sync needs
+> re-mapping.
+
 `explore_payables_warehouse.py` is a **read-only** probe of the Azure SQL
 warehouse `QuickBooksReplica`. It answers the four questions PayablesTool's
 sync needs, and writes **one self-contained, timestamped text file** to

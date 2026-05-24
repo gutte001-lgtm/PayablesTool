@@ -136,23 +136,23 @@ Parameters are pyodbc `?` placeholders. Dates bind as ISO strings.
 
 **(1) Open bills** — the steady-state pull (~280 rows today).
 ```sql
-SELECT Id, DocNumber, TxnDate, DueDate, VendorRefId, VendorRefName,
+SELECT Id, DocNumber, VendorRefId, VendorRefName, TxnDate, DueDate,
        TotalAmt, Balance, PrivateNote, CurrencyRefName, DepartmentRefName,
+       APAccountRefName, SalesTermRefName,
        MetaData_CreateTime, MetaData_LastUpdatedTime
 FROM dbo.Bill
-WHERE Balance > 0
-ORDER BY DueDate;
+WHERE Balance > 0;
 ```
 
 **(2) Recently-updated bills** — look-back window to catch paid/edited bills
 (`Balance` dropped to 0, or any field changed). `?` = `now − LOOKBACK_DAYS`.
 ```sql
-SELECT Id, DocNumber, TxnDate, DueDate, VendorRefId, VendorRefName,
+SELECT Id, DocNumber, VendorRefId, VendorRefName, TxnDate, DueDate,
        TotalAmt, Balance, PrivateNote, CurrencyRefName, DepartmentRefName,
+       APAccountRefName, SalesTermRefName,
        MetaData_CreateTime, MetaData_LastUpdatedTime
 FROM dbo.Bill
-WHERE MetaData_LastUpdatedTime >= ?
-ORDER BY MetaData_LastUpdatedTime;
+WHERE MetaData_LastUpdatedTime >= ?;
 ```
 
 **(3) Line detail for a bill** — drives categorization. `?` = `Bill.Id`.
@@ -209,6 +209,7 @@ parse failure → store NULL + flag, count in `AuditLog`). QB ids are `nvarchar`
 | `currency` | TEXT | `CurrencyRefName` | — (assume USD) |
 | `department` | TEXT | `DepartmentRefName` | — |
 | `ap_account` | TEXT | `APAccountRefName` | — |
+| `sales_term` | TEXT | `SalesTermRefName` | — (for later pay-date logic) |
 | `qb_created_at` | TEXT (ISO dt) | `MetaData_CreateTime` | — |
 | `qb_updated_at` | TEXT (ISO dt) | `MetaData_LastUpdatedTime` | drives look-back |
 | `is_paid` | INTEGER | derived | `1 if open_balance_cents == 0` |

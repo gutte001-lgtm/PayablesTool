@@ -2,7 +2,7 @@
 
 ## Project context
 
-PayablesTool is a new standalone Flask + SQLite app at `C:\Users\Joe\OneDrive - Healthcare Markets DBA\Desktop\Claude Projects\PayablesTool`. Follow the same conventions as CloseTool and TrainingBriefing: Python 3.11 venv, APScheduler for background jobs, python-dotenv for secrets, `AGENTS.md` for git/merge hygiene rules (same `git merge --no-ff` and `--ff-only` patterns; same `git config --global core.editor notepad` requirement on Windows).
+PayablesTool is a new standalone Flask + SQLite app at `C:\Users\Joe\OneDrive - Healthcare Markets DBA\Desktop\Claude Projects\PayablesTool`. Follow the same conventions as CloseTool and TrainingBriefing: Python 3.12 venv (the build was done on 3.12; the original spec said 3.11), APScheduler for background jobs, python-dotenv for secrets, `AGENTS.md` for git/merge hygiene rules (same `git merge --no-ff` and `--ff-only` patterns; same `git config --global core.editor notepad` requirement on Windows).
 
 The app reads bills and bill payments from the boss-maintained Azure SQL warehouse `QuickBooksReplica` at `quickbooks-sq1.database.windows.net` (creds at `%LOCALAPPDATA%\AzureWarehouse\azure.env`, user `joeguttenplan`). Reuse the connection pattern from CloseTool's `warehouse_finance.py`. The app never writes back to QuickBooks — QB remains system of record for bill payment and check printing. PayablesTool produces (a) an approved Pay Run Excel for the CFO's positive-pay upload to the bank, and (b) a CEO-ready payables detail printout.
 
@@ -20,6 +20,18 @@ Joe's team currently re-keys notes between Excel files every pay-run cycle. QB A
 - **ceo** — read-only consumer. Receives the CEO Excel (no login in v1).
 
 ## Data model
+
+> **Note (2026-05-23):** the block below is the *original pre-discovery* design.
+> The **authoritative current schema is `init_db.py`** (with the
+> `PHASE_3_5_SCHEMA` / `PHASE_3_6_SCHEMA` additions) and the column mapping in
+> [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md). Field names evolved once the
+> warehouse was probed: there is **no `vendor_type`** in the warehouse (so
+> categorization is the GL/Class rules engine, not a vendor-type copy); money is
+> stored as `*_cents` INTEGER columns; bill/line tables use `qb_*` source-named
+> columns; and `GLRule.match_type` is one of
+> `gl_account_number | gl_account_name_like | class_name | gl_and_class`
+> (plus a `VendorCategoryDefault` fallback table) — not the
+> `gl_account | qb_class | vendor_type` shown here.
 
 ```
 User                  — username, email, role, password_hash
@@ -86,6 +98,13 @@ After Export, the warehouse sync continues to update each line's paid status by 
 
 ## Phases / branches
 
+> **Status as of 2026-05-23:** Phases 0, 1 (1a + 1b), 2, 3, 3.5, 3.6, and 4 are
+> implemented and merged to `master`. Phases 5 (Excel exports), 6 (spend
+> summary), and 8 (hosting) are not started. The GL rules engine + `/admin/rules`
+> UI originally scoped as "Phase 7" shipped early as part of Phase 1b (see
+> [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md) §4); what remains of Phase 7 is
+> authoring the actual GL coding map (`[GL_CODING_MAP]`).
+
 Each phase is its own branch off master, merged with `git merge --no-ff -m "<msg>" <branch>` per CloseTool AGENTS.md §6. Don't combine phases.
 
 ### Phase 0 — Scaffold (`claude/phase-0-scaffold`)
@@ -126,6 +145,10 @@ Both exports stamped with the PayRun id and export timestamp on a footer line. S
 Dashboard at `/summary`: open AP by `app_category`, by vendor (top 20), by payment method, by week-due. Pivot live from current bill data, not from any pay run. Export button for each pivot.
 
 ### Phase 7 — GL rules engine (`claude/phase-7-rules`)
+**Mostly shipped early in Phase 1b.** The `/admin/rules` UI, the `gl_rule` /
+`vendor_category_default` tables, sync-time evaluation, and "re-run rules across
+all bills" already exist (`admin.py`, `sync.py`, `WAREHOUSE_SCHEMA.md` §4). What
+remains is authoring the actual rules from Joe's `[GL_CODING_MAP]`. Original spec:
 `/admin/rules` UI to manage `GLRule` rows. On bill sync, evaluate rules in priority order against each bill's `BillLine` rows; first match sets `app_category`. Vendor-type fallback if no rule matches. Re-run rules across all bills on demand. Joe will provide the initial GL coding map: [GL_CODING_MAP_TO_BE_INSERTED]. Common case: New Device GL accounts → `New Device Purchases`; Pre-owned GL accounts → `Pre-owned Device Purchases`.
 
 ### Phase 8 — Hosting for multi-user access (`claude/phase-8-deploy`)

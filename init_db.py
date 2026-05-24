@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS bill_line (
     gl_account_id      TEXT,
     gl_account_name    TEXT,
     gl_account_number  TEXT,             -- parsed leading digits, for rule matching
+    gl_account_number_canonical TEXT,    -- Phase 5: dim_account.account_number (reliable)
+    gl_account_path    TEXT,             -- Phase 5: dim_account.account_path (rollup, for gl_account_path_like)
     qb_class_id        TEXT,
     qb_class_name      TEXT,
     item_id            TEXT,
@@ -147,7 +149,8 @@ CREATE TABLE IF NOT EXISTS gl_rule (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     match_type      TEXT NOT NULL
         CHECK (match_type IN
-               ('gl_account_number','gl_account_name_like','class_name','gl_and_class')),
+               ('gl_account_number','gl_account_name_like','class_name','gl_and_class',
+                'gl_account_path_like')),
     match_value     TEXT NOT NULL,
     target_category TEXT NOT NULL,
     priority        INTEGER NOT NULL DEFAULT 100,
@@ -215,7 +218,7 @@ CREATE TABLE IF NOT EXISTS todo (
 );
 CREATE INDEX IF NOT EXISTS idx_todo_bill ON todo(qb_bill_id);
 
--- ===== Pay run (STUBS -- no UI until Phase 4) ==============================
+-- ===== Pay run (tables added Phase 1b; UI shipped Phase 4) =================
 CREATE TABLE IF NOT EXISTS pay_run (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT,

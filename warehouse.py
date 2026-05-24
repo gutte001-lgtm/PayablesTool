@@ -13,7 +13,7 @@ changes were made during the port:
      cryptic TLS failure. We raise a clear, actionable error instead.
   3. The connection opens readonly=True -- PayablesTool never writes to the
      warehouse, and QuickBooks stays system of record (BUILD_PLAN guardrail).
-  4. health_check() is added for the Phase 0 /health route: it never raises,
+  4. health_check() is added for the /health route: it never raises,
      returning a structured status dict so the route degrades gracefully when
      the warehouse is unreachable (sandbox firewall, missing driver, etc.).
 
@@ -22,8 +22,8 @@ Credentials live OUTSIDE the repo at %LOCALAPPDATA%\\AzureWarehouse\\azure.env
 var. Expected keys: AZURE_SQL_SERVER, AZURE_SQL_DATABASE, AZURE_SQL_USER,
 AZURE_SQL_PASSWORD.
 
-Phase 0 scope: connect + health check only. Bill/payment queries arrive in
-Phase 1, once warehouse table names are discovered (WAREHOUSE_SCHEMA.md).
+Scope: this module is connection + health check only. The bill/payment queries
+live in sync.py, against the schema documented in WAREHOUSE_SCHEMA.md.
 """
 
 import os

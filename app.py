@@ -1,10 +1,11 @@
 """
-app.py -- PayablesTool Flask entrypoint (Phase 0 scaffold).
+app.py -- PayablesTool Flask entrypoint.
 
 Wires Flask-Login (auth.py), Flask-WTF CSRF, the raw-sqlite3 data layer
-(db.py), and a /health smoke-test route that reports app + DB + warehouse
-connectivity. APScheduler is initialized but registers no jobs yet -- the
-15-minute warehouse sync arrives in Phase 1.
+(db.py), the bills/admin/followup/payruns blueprints, and a /health smoke-test
+route that reports app + DB + warehouse connectivity. start_scheduler()
+registers the 15-minute APScheduler warehouse sync (sync.run_sync), started
+from __main__.
 """
 
 import os
@@ -22,6 +23,7 @@ import tags
 from admin import init_admin
 from auth import init_auth
 from bills import init_bills
+from exports import init_exports
 from followup import init_followup
 from payruns import init_payruns
 from warehouse import health_check
@@ -52,6 +54,7 @@ init_admin(app)
 init_bills(app)
 init_followup(app)
 init_payruns(app)
+init_exports(app)
 
 
 @app.context_processor

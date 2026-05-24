@@ -4,7 +4,7 @@ bills.py -- Phase 2 bill list + detail UI (where Marilyn lives).
   /bills                 filterable/searchable/sortable/paginated list + KPI bar
   /inbox                 role dispatcher -> controller queue or ap_clerk New queue
   /inbox/controller      AP_Reviewed queue (controller)
-  /inbox/cfo             stub (pay-run CFO queue arrives in Phase 4)
+  /inbox/cfo             pay runs Submitted_to_CFO awaiting CFO approval
   /bills/<id>            detail: read-only QB facts + GL lines/breakdown,
                          editable metadata (one Save), notes, todos, audit panel
   POST .../metadata      save metadata (ap_clerk, controller); audited

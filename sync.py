@@ -138,6 +138,12 @@ def _line_matches(line, rule):
         return acct_num is not None and acct_num == mv.strip()
     if mt == "gl_account_name_like":
         return bool(_like_to_regex(mv).match(acct_name)) if mv else False
+    if mt == "gl_account_path_like":
+        # Phase 5: match the canonical rollup path from reporting.dim_account.
+        # Same anchored, case-insensitive LIKE as gl_account_name_like. NULL/empty
+        # path never matches (a line we couldn't join to dim_account stays uncat).
+        path = line.get("gl_account_path") or ""
+        return bool(_like_to_regex(mv).match(path)) if (mv and path) else False
     if mt == "class_name":
         if "%" in mv or "_" in mv:
             return bool(_like_to_regex(mv).match(cls))
@@ -230,8 +236,25 @@ def _bill_row_to_dict(r):
     }
 
 
-def fetch_bill_lines(cur, bill_ids):
-    """-> {bill_id: [line_dict, ...]} from reporting.fact_bill_line."""
+def load_dim_accounts(cur):
+    """One-shot {account_id: (number, path)} from reporting.dim_account.
+
+    Phase 5: the rollup rules match on the account's financial-statement path,
+    and fact_bill_line delivers COGS lines mostly name-only (the parsed
+    gl_account_number is NULL for most of them). dim_account, joined by
+    distribution_account_id, gives the *canonical* number and rollup path for
+    every line. Read-only reference data; loaded once per sync run."""
+    cur.execute(
+        "SELECT account_id, account_number, account_path FROM reporting.dim_account")
+    return {str(aid): (num, path) for aid, num, path in cur.fetchall()}
+
+
+def fetch_bill_lines(cur, bill_ids, dim=None):
+    """-> {bill_id: [line_dict, ...]} from reporting.fact_bill_line, each line
+    stamped with the canonical account number + rollup path from dim_account
+    (joined by distribution_account_id). `dim` is loaded once if not supplied."""
+    if dim is None:
+        dim = load_dim_accounts(cur)
     out = {}
     for batch in _batches(bill_ids, _IN_BATCH):
         ph = ",".join(["?"] * len(batch))
@@ -249,6 +272,9 @@ def fetch_bill_lines(cur, bill_ids):
         for r in cur.fetchall():
             bid = str(r[0])
             acct_name = r[11]
+            acct_id = r[10]
+            canon_num, acct_path = dim.get(str(acct_id), (None, None)) \
+                if acct_id is not None else (None, None)
             out.setdefault(bid, []).append({
                 "line_number": int(r[1]) if r[1] is not None else 0,
                 "qb_line_id": r[2],
@@ -262,6 +288,8 @@ def fetch_bill_lines(cur, bill_ids):
                 "gl_account_id": r[10],
                 "gl_account_name": acct_name,
                 "gl_account_number": parse_gl_number(acct_name),
+                "gl_account_number_canonical": canon_num,
+                "gl_account_path": acct_path,
                 "jira_epic_id": (r[12] or None),
             })
     return out
@@ -348,8 +376,9 @@ def recompute_for_bill(conn, bill_id):
     if not b:
         return None, None
     lines = [dict(r) for r in conn.execute(
-        "SELECT line_amount_cents, gl_account_number, gl_account_name, "
-        "qb_class_name FROM bill_line WHERE qb_bill_id=?", (bill_id,))]
+        "SELECT line_amount_cents, gl_account_number, gl_account_number_canonical, "
+        "gl_account_name, gl_account_path, qb_class_name "
+        "FROM bill_line WHERE qb_bill_id=?", (bill_id,))]
     cat, src, breakdown = compute_app_category(
         lines, rules, vendor_defaults.get(b["vendor_ref"]), b["app_category_manual"])
     _store_category(conn, bill_id, cat, src, breakdown, _now_iso())
@@ -427,12 +456,14 @@ def _replace_lines(conn, bill_id, lines):
         conn.execute(
             "INSERT INTO bill_line (qb_bill_id, line_number, qb_line_id, "
             "detail_type, line_description, line_amount_cents, gl_account_id, "
-            "gl_account_name, gl_account_number, qb_class_id, qb_class_name, "
-            "item_id, item_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "gl_account_name, gl_account_number, gl_account_number_canonical, "
+            "gl_account_path, qb_class_id, qb_class_name, "
+            "item_id, item_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (bill_id, ln["line_number"], ln["qb_line_id"], ln["detail_type"],
              ln["line_description"], ln["line_amount_cents"], ln["gl_account_id"],
-             ln["gl_account_name"], ln["gl_account_number"], ln["qb_class_id"],
-             ln["qb_class_name"], ln["item_id"], ln["item_name"]),
+             ln["gl_account_name"], ln["gl_account_number"],
+             ln.get("gl_account_number_canonical"), ln.get("gl_account_path"),
+             ln["qb_class_id"], ln["qb_class_name"], ln["item_id"], ln["item_name"]),
         )
 
 
@@ -648,8 +679,9 @@ def recompute_all(conn=None):
         for b in bills:
             bid = b["qb_bill_id"]
             lines = [dict(r) for r in conn.execute(
-                "SELECT line_amount_cents, gl_account_number, gl_account_name, "
-                "qb_class_name FROM bill_line WHERE qb_bill_id=?", (bid,))]
+                "SELECT line_amount_cents, gl_account_number, gl_account_number_canonical, "
+                "gl_account_name, gl_account_path, qb_class_name "
+                "FROM bill_line WHERE qb_bill_id=?", (bid,))]
             cat, src, breakdown = compute_app_category(
                 lines, rules, vendor_defaults.get(b["vendor_ref"]),
                 b["app_category_manual"])

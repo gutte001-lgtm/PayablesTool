@@ -8,10 +8,18 @@ warehouse `QuickBooksReplica`; QuickBooks stays the system of record.
 See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the full spec and phase plan, and
 [`AGENTS.md`](AGENTS.md) for working rules.
 
-> **Phase 0 — Scaffold.** This is the foundation only: project config, the
-> ported Azure connector, a real login (Flask-Login), four seed users, and a
-> `/health` smoke-test route. No bill sync, no bill UI, no exports yet — those
-> are Phases 1–5.
+> **Current state (2026-05-23): Phases 0–4 complete.** Working today: real
+> login (Flask-Login) with four seed users and a `/health` route; a 15-minute
+> APScheduler warehouse sync (`sync.py`) that mirrors open bills + lines from
+> `QuickBooksReplica` and auto-categorizes them via the GL/Class rules engine;
+> the bill list/detail UI (`/bills`) with the approval state machine
+> (`New → AP_Reviewed → Controller_Reviewed`), append-only notes, to-dos,
+> status pills, `@mention` tags, and open items; the `/follow-up` workspace;
+> the GL-rules + vendor-default admin (`/admin/rules`) and sync dashboard
+> (`/admin/sync`); and the pay-run builder (`/pay-runs`).
+> **Not built yet:** Excel exports (Phase 5), the spend dashboard (Phase 6),
+> and multi-user hosting (Phase 8). See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the
+> phase plan.
 
 ## Prerequisites
 
@@ -53,7 +61,7 @@ Copy-Item .env.example .env
 #     SECRET_KEY            (python -c "import secrets; print(secrets.token_urlsafe(48))")
 #     SEED_DEFAULT_PASSWORD (your chosen dev password for the seed users)
 
-# create payables.db and seed the four users
+# create payables.db, seed the four users, and seed status pills
 python init_db.py
 
 # run
@@ -76,6 +84,33 @@ python app.py
 
 Emails are placeholders pending `[AP_CLERK_USER_LIST]` in the build plan.
 Additional AP clerks (Allen, Robby, …) are added once their emails are known.
+
+## Database migrations
+
+`init_db.py` builds the **full current schema** for a fresh DB. For an existing
+`payables.db`, apply the incremental migrations in order — each is idempotent
+and exits 0 if already applied. Pause OneDrive first (see
+[`AGENTS.md`](AGENTS.md) §8):
+
+```powershell
+python migrations/001_phase_3_5.py   # status pills + bill tags
+python migrations/002_phase_3_6.py   # open items
+python migrations/003_phase_4.py     # pay-run line-review columns + unique index
+```
+
+## Tests
+
+Tests are plain Python scripts (no pytest); each prints `ok`/`FAIL` lines and
+exits with the failure count. They build throwaway temp DBs and never touch the
+live `payables.db`, but they read `SECRET_KEY` from `.env`.
+
+```powershell
+python test_phase3.py        # approval workflow + rules regression
+python test_phase3_e2e.py    # approval end-to-end
+python test_phase_3_5.py     # follow-up workspace
+python test_phase_3_6.py     # open items
+python test_phase_4.py       # pay-run builder
+```
 
 ## Phase 0 smoke test
 
