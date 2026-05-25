@@ -38,6 +38,11 @@ _spec = importlib.util.spec_from_file_location(
 mig = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mig)
 
+_spec5 = importlib.util.spec_from_file_location(
+    "mig005", ROOT / "migrations" / "005_general_admin_rollup.py")
+mig5 = importlib.util.module_from_spec(_spec5)
+_spec5.loader.exec_module(mig5)
+
 # ---- pre-Phase-5 ("legacy") schema: no canonical/path cols, narrow CHECK ----
 LEGACY = """
 CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, name TEXT,
@@ -208,6 +213,87 @@ check("compat: class_name case-insensitive exact",
 check("compat: gl_and_class",
       sync._line_matches(L(gl_account_number="53100", qb_class_name="X"),
                          R("gl_and_class", "53100||X")) is True)
+
+print("=" * 60); print("test_general_admin_rollup (migration 005)"); print("=" * 60)
+GA_PATH = "GENERAL ADMINISTRATION EXPENSES:Finance Charges & Processing Fees"
+GA_RULE = R("gl_account_path_like", "GENERAL ADMINISTRATION EXPENSES:%")
+
+# -- unit: _line_matches semantics for the new rule
+check("ga: 72960 GENERAL ADMINISTRATION path matches",
+      sync._line_matches(L(gl_account_path=GA_PATH), GA_RULE) is True)
+check("ga: rollup-wide -- also folds in 72930 Business & Franchise Taxes (by design)",
+      sync._line_matches(L(gl_account_path="GENERAL ADMINISTRATION EXPENSES:Business & Franchise Taxes"),
+                         GA_RULE) is True)
+check("ga: NEGATIVE -- the SIMCO bill's other line (Other COGS) does NOT match",
+      sync._line_matches(L(gl_account_path="COST OF GOODS SOLD:OTHER COST OF GOODS SOLD:Other COGS"),
+                         GA_RULE) is False)
+check("ga: NEGATIVE -- ^$-anchored, mid-string GENERAL ADMINISTRATION does NOT match",
+      sync._line_matches(L(gl_account_path="X GENERAL ADMINISTRATION EXPENSES:Finance Charges"),
+                         GA_RULE) is False)
+
+# -- migration 005 loads the rule, idempotently, on a fresh init_db DB
+gp = fresh_path()
+m1 = mig5.migrate(gp, verbose=False)
+check("ga-mig: first run inserts the rule", m1["rule"] == "inserted")
+check("ga-mig: first run not flagged already_migrated", m1["already_migrated"] is False)
+cn = sqlite3.connect(gp)
+rows = cn.execute("SELECT target_category, priority, active FROM gl_rule "
+                  "WHERE match_type='gl_account_path_like' "
+                  "AND match_value='GENERAL ADMINISTRATION EXPENSES:%'").fetchall()
+check("ga-mig: exactly one GENERAL ADMINISTRATION rule row", len(rows) == 1)
+check("ga-mig: target is Other Operating Expenses", rows[0][0] == "Other Operating Expenses")
+check("ga-mig: priority 116 and active", rows[0][1] == 116 and rows[0][2] == 1)
+cn.close()
+m2 = mig5.migrate(gp, verbose=False)
+check("ga-mig: second run is a no-op (already present)", m2["rule"] == "already present")
+check("ga-mig: second run flagged already_migrated", m2["already_migrated"] is True)
+cn = sqlite3.connect(gp)
+check("ga-mig: still exactly one row after rerun (no clobber/dupe)",
+      cn.execute("SELECT COUNT(*) FROM gl_rule "
+                 "WHERE match_value='GENERAL ADMINISTRATION EXPENSES:%'").fetchone()[0] == 1)
+cn.close()
+
+# -- end-to-end POSITIVE: a SIMCO-shaped bill recomputes to Other Operating Expenses
+ep = fresh_path()
+mig5.migrate(ep, verbose=False)                       # load the GA rule
+cn = sqlite3.connect(ep); cn.row_factory = sqlite3.Row
+cn.execute("INSERT INTO bill (qb_bill_id,vendor_ref,amount_cents,open_balance_cents,last_synced_at) "
+           "VALUES ('SIMCO','SIMCO Electronics (V)',1271,1271,'t')")
+cn.execute("INSERT INTO bill_metadata (qb_bill_id,approval_state,created_at,updated_at) "
+           "VALUES ('SIMCO','New','t','t')")
+# dominant line = 72960 finance charge ($12.71); plus a $0 Other COGS line (mirrors bill 237344)
+cn.execute("INSERT INTO bill_line (qb_bill_id,line_number,gl_account_number,gl_account_name,"
+           "gl_account_path,line_amount_cents) VALUES "
+           "('SIMCO',1,'72960','72960 GENERAL ADMINISTRATION EXPENSES:Finance Charges & Processing Fees',?,1271)",
+           (GA_PATH,))
+cn.execute("INSERT INTO bill_line (qb_bill_id,line_number,gl_account_name,gl_account_path,line_amount_cents) "
+           "VALUES ('SIMCO',2,'Other COGS','COST OF GOODS SOLD:OTHER COST OF GOODS SOLD:Other COGS',0)")
+cn.commit()
+sync.recompute_for_bill(cn, "SIMCO")
+cn.commit()
+check("ga-e2e: SIMCO 72960 bill -> Other Operating Expenses (was Uncategorized)",
+      cn.execute("SELECT app_category FROM bill_metadata WHERE qb_bill_id='SIMCO'")
+        .fetchone()["app_category"] == "Other Operating Expenses")
+cn.close()
+
+# -- end-to-end NEGATIVE: a PROFESSIONAL FEES bill stays Consulting (GA rule must not grab it)
+np = fresh_path()
+mig5.migrate(np, verbose=False)                       # GA rule loaded, alongside...
+cn = sqlite3.connect(np); cn.row_factory = sqlite3.Row
+cn.execute("INSERT INTO bill (qb_bill_id,vendor_ref,amount_cents,open_balance_cents,last_synced_at) "
+           "VALUES ('PF','Freestone Advisory, LLC',500000,500000,'t')")
+cn.execute("INSERT INTO bill_metadata (qb_bill_id,approval_state,created_at,updated_at) "
+           "VALUES ('PF','New','t','t')")
+cn.execute("INSERT INTO bill_line (qb_bill_id,line_number,gl_account_name,gl_account_path,line_amount_cents) "
+           "VALUES ('PF',1,'Consulting Fees','PROFESSIONAL FEES:Consulting Fees',500000)")
+cn.execute(_RULE_INS, ("gl_account_path_like", "PROFESSIONAL FEES:%", "Consulting", 103))  # ...the p103 rollup
+cn.commit()
+sync.recompute_for_bill(cn, "PF")
+cn.commit()
+check("ga-e2e NEGATIVE: PROFESSIONAL FEES bill stays Consulting (GA rule does not over-reach)",
+      cn.execute("SELECT app_category FROM bill_metadata WHERE qb_bill_id='PF'")
+        .fetchone()["app_category"] == "Consulting")
+cn.close()
 
 # ====================================================================
 for d in _TMP:
