@@ -1,8 +1,7 @@
 # GL_CODING_MAP_FINAL.md — final rollup GL → app_category rules
 
 Status: **final taxonomy + rule set, approved by Joe's review of
-`archive/GL_CODING_MAP_V2.md`** (kept as historical reference). The **engine
-change** to
+`archive/GL_CODING_MAP_V2.md`** (kept as historical reference). The **engine change** to
 support these rules shipped this phase (sync + schema + migration + tests), and
 **the rules are now loaded — `gl_rule` holds 25 rows** (the 22 documented below
 plus 3 small-opex rollups added at insert time; see §5). Authored 2026-05-23 from
