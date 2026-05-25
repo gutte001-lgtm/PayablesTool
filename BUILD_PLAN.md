@@ -162,6 +162,19 @@ type. The GL coding map is authored and **25 rules are loaded** into `gl_rule`
 ### Phase 8 — Hosting for multi-user access (`claude/phase-8-deploy`)
 v1 ran on Joe's machine; CFO needs access from his. Move to [HOST_DECISION — Azure App Service is the obvious choice given the warehouse is in Azure; confirm with Joe and whoever owns Azure billing]. SQLite stays for v1; revisit Postgres only if multi-user contention shows up. HTTPS, role-based access intact.
 
+## Known gaps / deferred tech debt
+
+- **The `gl_rule` rows are not codified in version control.** The loaded rules
+  (26 once `migrations/005_general_admin_rollup.py` runs on the live DB) live
+  only in the live `payables.db` — entered via `/admin/rules` or an ad-hoc load,
+  never committed. `init_db.py` ships `gl_rule` **empty by design**, so a
+  from-scratch rebuild does **not** reproduce the rule set. Migration 005 is the
+  **first committed rule-loading migration** (001–004 were schema-only); see its
+  header for the full note. Codifying the complete rule set as a committed
+  loader/seed is **deferred to a future session**. Not blocking for current
+  workflows, but a from-scratch DB rebuild (or a clean-room deployment for
+  Phase 8 hosting) would require re-entering the rules by hand.
+
 ## Conventions and guardrails
 
 - Follow CloseTool's `AGENTS.md` §6 git/merge rules verbatim.
