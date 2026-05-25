@@ -1,7 +1,10 @@
-# PHASE_5_DESIGN.md — Excel exports (design spec, not built)
+# PHASE_5_DESIGN.md — Excel exports (design spec — now implemented)
 
-Status: **scoping only.** No code written yet. Review/revise this before any
-implementation. Authored 2026-05-23.
+Status: **IMPLEMENTED (2026-05-25).** This was the pre-build scoping doc; the
+exports shipped in `exports.py` + `excel_payrun.py` (with
+`migrations/004_phase_5_rules_engine.py`), which are now authoritative. The open
+questions below were resolved during implementation; this document is retained as
+the original design record. Authored 2026-05-23.
 
 ## Scope of this document
 

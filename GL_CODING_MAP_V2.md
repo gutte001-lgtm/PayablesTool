@@ -1,5 +1,7 @@
 # GL_CODING_MAP_V2.md — rollup-based GL → app_category rules (DRAFT for review)
 
+> **Superseded by [`GL_CODING_MAP_FINAL.md`](GL_CODING_MAP_FINAL.md) — kept for historical context.**
+
 Status: **draft for Joe's approval. Nothing inserted into `gl_rule`; engine not
 modified.** Authored 2026-05-23 from read-only warehouse pulls. Supersedes the
 leaf-by-leaf approach in `GL_CODING_MAP_DRAFT.md` (kept as historical reference).

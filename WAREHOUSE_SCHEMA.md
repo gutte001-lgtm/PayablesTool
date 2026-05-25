@@ -226,6 +226,8 @@ parse failure → store NULL + flag, count in `AuditLog`). QB ids are `nvarchar`
 | `line_amount_cents` | INTEGER | `line_amount` | Decimal×100 |
 | `gl_account_id` | TEXT | `distribution_account_id` | **rules-engine key** |
 | `gl_account_name` | TEXT | `distribution_account_name` | **rules-engine key** |
+| `gl_account_number_canonical` | TEXT | `dim_account.account_number` (join on `distribution_account_id`) | Phase 5; canonical GL number |
+| `gl_account_path` | TEXT | `dim_account.account_path` (join on `distribution_account_id`) | Phase 5; rollup path — **`gl_account_path_like` key** |
 | `qb_class_id` | TEXT | `class_id` | — |
 | `qb_class_name` | TEXT | `class_name` | **rules-engine key** |
 | `item_id` | TEXT | `item_id` | — |
@@ -275,7 +277,8 @@ recomputed on sync and on rule changes.
 GLRule
   id            INTEGER PK
   match_type    TEXT   -- 'gl_account_number' | 'gl_account_name_like'
-                       -- | 'class_name' | 'gl_and_class'
+                       -- | 'gl_account_path_like' | 'class_name' | 'gl_and_class'
+                       -- ('gl_account_path_like' added in Phase 5 for rollup rules)
   match_value   TEXT   -- e.g. '56100' (number/prefix), '%COGS%' (name like),
                        -- 'Pre-Owned' (class); for gl_and_class: 'acct||class'
   target_category TEXT

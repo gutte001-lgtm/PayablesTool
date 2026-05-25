@@ -52,7 +52,7 @@ Note                  — id, qb_bill_id, user_id, body, created_at (append-only
 Todo                  — id, qb_bill_id, body, completed_at, completed_by
 PayRun                — id, name, week_ending, created_by, status (Draft /
                         Submitted_to_Controller / Controller_Approved /
-                        Submitted_to_CFO / CFO_Approved / Locked / Exported)
+                        Submitted_to_CFO / CFO_Approved / Locked)
 PayRunLine            — pay_run_id, qb_bill_id, payment_method, amount_to_pay,
                         included, line_state (Pending / Approved / Rejected),
                         cfo_note
@@ -90,20 +90,25 @@ Draft              (ap_clerk builds: picks bills, sets payment_method per line)
   → Controller_Approved (Joe; can reject lines individually)
   → Submitted_to_CFO
   → CFO_Approved    (Shaun; can reject lines individually with cfo_note)
-  → Locked          (no further edits)
-  → Exported        (Pay Run Excel and CEO Excel generated; timestamp recorded)
+  → Locked          (terminal — no further edits)
 ```
 
-After Export, the warehouse sync continues to update each line's paid status by matching to BillPayment records; once paid, the bill drops off active views.
+(There is no separate `Exported` status in shipped code: the CFO and CEO Excel exports are generated on a **Locked** run as an audited action — `audit_log` action `pay_run_exported` — and the run stays `Locked`.)
+
+Paid-status reconciliation as shipped is **sync-triggered, balance-based, and bill-level** — not export-triggered and not line-level. When a bill is paid in QuickBooks its warehouse `Balance` falls to 0; the regular 15-minute sync then sets `bill.is_paid = 1` (`sync.py` — `is_paid = 1 if open_cents == 0 else 0`), and the bill drops out of the default open views, which filter `open_balance_cents > 0` (`bills.py`). PayablesTool does **not** read `BillPayment` records and does **not** reconcile paid status per `pay_run_line`. Line-level / BillPayment-matched reconciliation is a future phase, tied to partial payments (the deferred pay-run close-out work).
 
 ## Phases / branches
 
-> **Status as of 2026-05-23:** Phases 0, 1 (1a + 1b), 2, 3, 3.5, 3.6, and 4 are
-> implemented and merged to `master`. Phases 5 (Excel exports), 6 (spend
-> summary), and 8 (hosting) are not started. The GL rules engine + `/admin/rules`
-> UI originally scoped as "Phase 7" shipped early as part of Phase 1b (see
-> [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md) §4); what remains of Phase 7 is
-> authoring the actual GL coding map (`[GL_CODING_MAP]`).
+> **Status as of 2026-05-25:** Phases 0, 1 (1a + 1b), 2, 3, 3.5, 3.6, 4, and 5
+> are implemented and merged to `master`. Phase 5 shipped the CFO + CEO Excel
+> exports and the rollup GL rules engine (GL coding map authored and **25 rules
+> loaded** into `gl_rule`); it did **not** include partial payments or pay-run
+> close-out — those were punted (see the Phase 4 v1 scope note and the Phase 5
+> section). Phases 6 (spend summary) and 8 (hosting) are not started. The GL
+> rules engine + `/admin/rules` UI originally scoped as "Phase 7" shipped early
+> as part of Phase 1b (see [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md) §4); the
+> GL coding map (`[GL_CODING_MAP]`) is now authored and loaded, so Phase 7 is
+> complete.
 
 Each phase is its own branch off master, merged with `git merge --no-ff -m "<msg>" <branch>` per CloseTool AGENTS.md §6. Don't combine phases.
 
@@ -129,11 +134,12 @@ An explicit per-bill "this bill needs work" primitive — the counterpart to Pha
 `/pay-runs/new`: pick Controller_Reviewed bills (exclude Refund-Visibility and Prepayment-Deposit automatically), set payment_method per line (Check / Wire / Credit Card / ACH — default from Bill if QB has one), include/exclude toggle. `/pay-runs/<id>` shows the run grouped by Contractor sub-buckets and payment method per the uploaded sample. CFO view exposes per-line Approve / Reject with note. Lock action freezes the run. Contractor sub-bucket grouping reuses `bills.CONTRACTOR_GL_ACCOUNT_LEAF_NAMES` from Phase 3.5 — do not re-derive.
 
 **v1 scope decisions (Joe):**
-- **Partial payments are deferred to Phase 5.** Each line pays the bill's **full open balance**; the amount is locked (no per-line partial input). The earlier "allows partial" intent stranded residuals (a partially-paid bill stayed claimed by its Locked run with no release path), so partial-amount handling is designed properly in Phase 5 alongside export + close-out.
+- **Partial payments are deferred.** Each line pays the bill's **full open balance**; the amount is locked (no per-line partial input). The earlier "allows partial" intent stranded residuals (a partially-paid bill stayed claimed by its Locked run with no release path). Phase 5 shipped the Excel exports + rules engine **only** — partial-amount handling and pay-run close-out were **not** built and remain deferred to a future phase.
 - **Lifecycle is forward-only (no reopen).** To correct a submitted run, **reject the bad lines and create a new run.** If this proves painful in practice it becomes Phase 4.5.
 - Hardening: `UNIQUE(pay_run_id, qb_bill_id)` on `pay_run_line` (a bill appears at most once per run) and a state-guarded `advance` write (`UPDATE ... WHERE status=?` + rowcount check) to close the lifecycle TOCTOU. `init_db.py` builds the index for fresh DBs; `migrations/003_phase_4.py` adds it (and the two `reviewed_*` columns) idempotently — Joe runs it post-merge with OneDrive paused.
 
 ### Phase 5 — Excel exports (`claude/phase-5-export`)
+**Shipped 2026-05-25** in `exports.py` + `excel_payrun.py` (plus the rollup GL rules engine and `migrations/004_phase_5_rules_engine.py`). **Partial payments and pay-run close-out were not included and remain deferred** (see the Phase 4 v1 scope note above). Validated against the legacy sample with a penny-tie on both exports.
 Two exports, both via openpyxl, both matching the uploaded sample `Payment_Run_-_05_21_26__002_.xlsx`:
 
 1. **Pay Run Excel** — grouped exactly like the uploaded sample: Contractor Checks → Contractor Wire → Contractor Credit Cards → Contractor Total → Checks (everything else by category) → Buys (Pre-owned Devices) → Refunds/Reimbursements → Credit Cards → ACH/Wire → Total. Sub-subtotals at each break. Columns: Vendor, Vendor Type (display as `app_category`), Bill #, Date, Due Date, Amount, Open Balance, Payment Method, Bill Approval (composite `{approver} - {channel}`), Approval Date, Receipt/Delivery, Memo, Notes.
@@ -145,10 +151,12 @@ Both exports stamped with the PayRun id and export timestamp on a footer line. S
 Dashboard at `/summary`: open AP by `app_category`, by vendor (top 20), by payment method, by week-due. Pivot live from current bill data, not from any pay run. Export button for each pivot.
 
 ### Phase 7 — GL rules engine (`claude/phase-7-rules`)
-**Mostly shipped early in Phase 1b.** The `/admin/rules` UI, the `gl_rule` /
-`vendor_category_default` tables, sync-time evaluation, and "re-run rules across
-all bills" already exist (`admin.py`, `sync.py`, `WAREHOUSE_SCHEMA.md` §4). What
-remains is authoring the actual rules from Joe's `[GL_CODING_MAP]`. Original spec:
+**Shipped (engine in Phase 1b; rules authored + loaded in Phase 5).** The
+`/admin/rules` UI, the `gl_rule` / `vendor_category_default` tables, sync-time
+evaluation, and "re-run rules across all bills" exist (`admin.py`, `sync.py`,
+`WAREHOUSE_SCHEMA.md` §4); Phase 5 added the `gl_account_path_like` rollup match
+type. The GL coding map is authored and **25 rules are loaded** into `gl_rule`
+(see [`GL_CODING_MAP_FINAL.md`](GL_CODING_MAP_FINAL.md)). Original spec:
 `/admin/rules` UI to manage `GLRule` rows. On bill sync, evaluate rules in priority order against each bill's `BillLine` rows; first match sets `app_category`. Vendor-type fallback if no rule matches. Re-run rules across all bills on demand. Joe will provide the initial GL coding map: [GL_CODING_MAP_TO_BE_INSERTED]. Common case: New Device GL accounts → `New Device Purchases`; Pre-owned GL accounts → `Pre-owned Device Purchases`.
 
 ### Phase 8 — Hosting for multi-user access (`claude/phase-8-deploy`)
@@ -179,10 +187,10 @@ No special handling in v1. Recurring bills (Decathlon monthly, Milton bi-weekly 
 
 ## Placeholders Joe needs to fill before handoff
 
-1. `[JIRA_BASE_URL]` — Jira URL pattern, e.g. `https://healthcaremarkets.atlassian.net/browse/`
-2. `[AP_CLERK_USER_LIST]` — names + emails of AP team members getting logins
-3. `[GL_CODING_MAP]` — to be added before Phase 7; Phase 7 can be deferred until then
-4. `[HOST_DECISION]` — confirm Azure App Service for Phase 8, or alternative
+1. `[JIRA_BASE_URL]` — **DONE.** Set in `.env` (`https://medreppro.atlassian.net/browse/`).
+2. `[AP_CLERK_USER_LIST]` — names + emails of AP team members getting logins. **Still pending.**
+3. `[GL_CODING_MAP]` — **DONE.** Authored and loaded (25 rules; see [`GL_CODING_MAP_FINAL.md`](GL_CODING_MAP_FINAL.md)).
+4. `[HOST_DECISION]` — confirm Azure App Service for Phase 8, or alternative. **Still pending.**
 
 ## Handoff workflow
 

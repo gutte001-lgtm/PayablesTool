@@ -73,6 +73,8 @@ exactly the manual step PayablesTool is meant to replace with a per-line picker.
 
 ## Recommendation
 
+> **Shipped-behavior note (2026-05-25):** the exports as built do **not** fail-closed on a missing method — a blank `payment_method` defaults into the Check bucket ([`excel_payrun.py`](excel_payrun.py) `_section_key`). The fail-closed guardrail below is a recommendation, not current behavior.
+
 **Workflow fix (primary) + keep fail-closed.** Payment method is a per-cycle
 *planning decision* QB never stored; it must be set in PayablesTool. Keep the
 Phase 5 decision to **fail-closed at export** (block the CFO/CEO export until

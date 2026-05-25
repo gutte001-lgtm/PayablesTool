@@ -1,5 +1,7 @@
 # GL_CODING_MAP_DRAFT.md — proposed GL → app_category rules (DRAFT for review)
 
+> **Superseded by [`GL_CODING_MAP_FINAL.md`](GL_CODING_MAP_FINAL.md) — kept for historical context.**
+
 Status: **draft for Joe's approval. Nothing inserted into `gl_rule`.** Authored
 2026-05-23 from read-only warehouse queries + the legacy workbook as a labeled
 dataset.

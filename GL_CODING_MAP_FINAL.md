@@ -2,10 +2,10 @@
 
 Status: **final taxonomy + rule set, approved by Joe's review of
 `GL_CODING_MAP_V2.md`** (kept as historical reference). The **engine change** to
-support these rules is implemented this phase (sync + schema + migration +
-tests). **No rules are inserted into `gl_rule` yet** — that INSERT pass follows
-after Joe runs the migration and a re-sync. Authored 2026-05-23 from read-only
-warehouse pulls.
+support these rules shipped this phase (sync + schema + migration + tests), and
+**the rules are now loaded — `gl_rule` holds 25 rows** (the 22 documented below
+plus 3 small-opex rollups added at insert time; see §5). Authored 2026-05-23 from
+read-only warehouse pulls.
 
 ## §1 — Category list (final 17)
 
@@ -66,9 +66,10 @@ set for the next pass.
 | 111 | gl_account_path_like | `ACCRUED EXPENSES:%` | Notes Payable | 63,000 | 1 | rollup |
 | 112 | gl_account_path_like | `FIXED ASSETS:%` | CAPEX | 68,687 | 3 | rollup |
 
-**22 rules** (9 leaf + 13 rollup). Device new/pre-owned are leaf `name_like`
-rules (work in the current engine); the rollups need the new
-`gl_account_path_like` match_type (§4).
+**22 rules documented here** (9 leaf + 13 rollup); **25 are loaded** in `gl_rule`
+— the extra 3 are the small-opex rollups added at insert time (priorities
+113–115; see §5). Device new/pre-owned are leaf `name_like` rules (work in the
+current engine); the rollups need the `gl_account_path_like` match_type (§4).
 
 ## §3 — Leaf-exception rationale
 
@@ -135,7 +136,7 @@ and still work (the leaf rules above rely on them).
 | Other Operating Expenses | 7,101 | 6 |
 
 **Covered: $4,412,575 = 99.51%. Uncategorized: $21,680 = 0.49%.** Remaining
-buckets (all small opex, none ruled by design):
+buckets (all small opex, none ruled at simulation time):
 
 | Rollup | $ | bills |
 |---|---|---|
@@ -145,8 +146,13 @@ buckets (all small opex, none ruled by design):
 | GENERAL ADMINISTRATION EXPENSES | 13 | 7 |
 | SALES & PAYROLL TAX / SELLING:Customer Acquisition / Other COGS | 0 | 11 |
 
-These can later get one rollup rule each → Other Operating Expenses, or stay
-Uncategorized for manual handling (Joe's call at INSERT time).
+**At insert time, three of these were loaded as rollup rules → Other Operating
+Expenses** (`PEOPLE & TEAM DEVELOPMENT EXPENSES`, `MEALS, TRAVEL, & ENTERTAINMENT
+EXPENSES`, `SUPPLIES EXPENSES` — priorities 113–115), bringing `gl_rule` to 25
+rows. `GENERAL ADMINISTRATION EXPENSES` (which holds `72960 Finance Charges &
+Processing Fees`) and the ~$0 sales-tax / Customer-Acquisition buckets were **not**
+loaded and stay Uncategorized for manual handling — which is why, e.g., the SIMCO
+`$12.71` finance-charge bill (GL 72960) still lands Uncategorized.
 
 ## §6 — Legacy validation (84 hand-labeled bills)
 

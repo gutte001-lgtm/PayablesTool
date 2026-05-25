@@ -8,18 +8,18 @@ warehouse `QuickBooksReplica`; QuickBooks stays the system of record.
 See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the full spec and phase plan, and
 [`AGENTS.md`](AGENTS.md) for working rules.
 
-> **Current state (2026-05-23): Phases 0–4 complete.** Working today: real
+> **Current state (2026-05-25): Phases 0–5 complete.** Working today: real
 > login (Flask-Login) with four seed users and a `/health` route; a 15-minute
 > APScheduler warehouse sync (`sync.py`) that mirrors open bills + lines from
-> `QuickBooksReplica` and auto-categorizes them via the GL/Class rules engine;
-> the bill list/detail UI (`/bills`) with the approval state machine
-> (`New → AP_Reviewed → Controller_Reviewed`), append-only notes, to-dos,
-> status pills, `@mention` tags, and open items; the `/follow-up` workspace;
-> the GL-rules + vendor-default admin (`/admin/rules`) and sync dashboard
-> (`/admin/sync`); and the pay-run builder (`/pay-runs`).
-> **Not built yet:** Excel exports (Phase 5), the spend dashboard (Phase 6),
-> and multi-user hosting (Phase 8). See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the
-> phase plan.
+> `QuickBooksReplica` and auto-categorizes them via the rollup GL/Class rules
+> engine (25 rules loaded); the bill list/detail UI (`/bills`) with the approval
+> state machine (`New → AP_Reviewed → Controller_Reviewed`), append-only notes,
+> to-dos, status pills, `@mention` tags, and open items; the `/follow-up`
+> workspace; the GL-rules + vendor-default admin (`/admin/rules`) and sync
+> dashboard (`/admin/sync`); the pay-run builder (`/pay-runs`); and the CFO + CEO
+> Excel exports (`/pay-runs/<id>/export/cfo.xlsx` and `…/ceo.xlsx`).
+> **Not built yet:** the spend dashboard (Phase 6) and multi-user hosting
+> (Phase 8). See [`BUILD_PLAN.md`](BUILD_PLAN.md) for the phase plan.
 
 ## Prerequisites
 
@@ -96,6 +96,7 @@ and exits 0 if already applied. Pause OneDrive first (see
 python migrations/001_phase_3_5.py   # status pills + bill tags
 python migrations/002_phase_3_6.py   # open items
 python migrations/003_phase_4.py     # pay-run line-review columns + unique index
+python migrations/004_phase_5_rules_engine.py  # gl_account_path_like + canonical GL columns
 ```
 
 ## Tests
@@ -110,6 +111,8 @@ python test_phase3_e2e.py    # approval end-to-end
 python test_phase_3_5.py     # follow-up workspace
 python test_phase_3_6.py     # open items
 python test_phase_4.py       # pay-run builder
+python test_phase_5_export.py        # CFO + CEO Excel exports
+python test_phase_5_rules_engine.py  # rollup rules engine
 ```
 
 ## Phase 0 smoke test
