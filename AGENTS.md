@@ -101,3 +101,22 @@ directory failed" prompts while OneDrive holds a handle on files being
 moved. **Pause OneDrive sync before branch operations** (OneDrive tray icon
 → Pause syncing), then resume after. There is no code fix; this is a known
 environment gotcha.
+
+## 9. Scope and environment escalation
+
+When a task requires either (a) touching files outside the task's apparent
+surface area, or (b) changing the dev environment (installing a new pip
+package, downloading a browser/runtime, editing `requirements.txt`),
+**escalate to Joe explicitly before doing it** — even when the change looks
+small and reasonable. "Reasonable" is not "approved."
+
+The agent's own `AskUserQuestion` with a self-authored `(Recommended)` option
+is **not** explicit approval; treat it as a proposal that still needs a
+deliberate Joe selection on the substance, not on the default.
+
+Recorded lapse — **Phase 6 (2026-05-26):** the agent ran two such decisions
+through its own `AskUserQuestion`-with-defaults pattern and proceeded without
+explicit approval: (1) `pip install playwright` + `playwright install chromium`
+(~150MB browser download), and (2) adding a cross-file exact `?vendor=`
+filter to `bills.py` (scope outside the summary-only blueprint). Both shipped
+fine, but the workflow pattern is the failure mode this rule prevents.
