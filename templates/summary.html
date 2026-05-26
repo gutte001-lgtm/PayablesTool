@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Spend Summary &middot; PayablesTool{% endblock %}
+{% macro money(c) %}${{ "{:,.2f}".format((c or 0)/100) }}{% endmacro %}
+{% macro pct(p) %}{{ "%.1f"|format(p or 0) }}%{% endmacro %}
+
+{% block content %}
+<div class="card summary-page">
+  <div class="summary-head">
+    <h1>Spend Summary <span class="count">Open AP as of {{ header.as_of or 'never synced' }}</span></h1>
+    <div class="summary-actions no-print">
+      <a class="link-btn" href="{{ url_for('summary.export_xlsx') }}">⬇ Excel</a>
+    </div>
+  </div>
+
+  <section class="summary-band">
+    <div class="kpi">
+      <div class="kpi-label">Total Open AP</div>
+      <div class="kpi-value">{{ money(header.total_open_cents) }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Open bills</div>
+      <div class="kpi-value">{{ header.bill_count }}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Uncategorized</div>
+      <div class="kpi-value">
+        {% if header.uncategorized_count %}
+          <a href="{{ url_for('bills.list_bills', uncat='1') }}">{{ header.uncategorized_count }}</a>
+        {% else %}
+          0
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="summary-section">
+    <h2>Aging</h2>
+    <table class="grid">
+      <thead>
+        <tr><th>Bucket</th><th style="text-align:right">Bill count</th>
+            <th style="text-align:right">Open $</th>
+            <th style="text-align:right">% of total</th></tr>
+      </thead>
+      <tbody>
+        {% set ag_total_n = aging|sum(attribute='bill_count') %}
+        {% set ag_total_c = aging|sum(attribute='open_cents') %}
+        {% for b in aging %}
+        <tr>
+          <td>{{ b.label }}</td>
+          <td style="text-align:right">{{ b.bill_count }}</td>
+          <td style="text-align:right">{{ money(b.open_cents) }}</td>
+          <td style="text-align:right">{{ pct(b.pct) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="total-row">
+          <td><strong>TOTAL</strong></td>
+          <td style="text-align:right"><strong>{{ ag_total_n }}</strong></td>
+          <td style="text-align:right"><strong>{{ money(ag_total_c) }}</strong></td>
+          <td style="text-align:right"><strong>{% if ag_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="summary-section">
+    <h2>Categories</h2>
+    <p class="note no-print">Open AP grouped by category. Uncategorized pinned to the bottom — a hygiene flag, not a real category.</p>
+    <table class="grid">
+      <thead>
+        <tr><th>Category</th><th style="text-align:right">Bill count</th>
+            <th style="text-align:right">Open $</th>
+            <th style="text-align:right">% of total</th></tr>
+      </thead>
+      <tbody>
+        {% set cat_total_n = categories|sum(attribute='bill_count') %}
+        {% set cat_total_c = categories|sum(attribute='open_cents') %}
+        {% for c in categories %}
+        <tr>
+          <td><a href="{{ url_for('bills.list_bills', app_category=c.label) }}">{{ c.label }}</a></td>
+          <td style="text-align:right">{{ c.bill_count }}</td>
+          <td style="text-align:right">{{ money(c.open_cents) }}</td>
+          <td style="text-align:right">{{ pct(c.pct) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="total-row">
+          <td><strong>TOTAL</strong></td>
+          <td style="text-align:right"><strong>{{ cat_total_n }}</strong></td>
+          <td style="text-align:right"><strong>{{ money(cat_total_c) }}</strong></td>
+          <td style="text-align:right"><strong>{% if cat_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="summary-section">
+    <h2>Top 20 Vendors</h2>
+    <table class="grid">
+      <thead>
+        <tr><th>Vendor</th><th style="text-align:right">Bill count</th>
+            <th>Oldest bill date</th>
+            <th style="text-align:right">Open $</th>
+            <th style="text-align:right">% of total</th></tr>
+      </thead>
+      <tbody>
+        {% set v_total_n = top_vendors|sum(attribute='bill_count') %}
+        {% set v_total_c = top_vendors|sum(attribute='open_cents') %}
+        {% for v in top_vendors %}
+        <tr{% if v.other_vendor_count is not none %} class="other-row"{% endif %}>
+          <td>
+            {% if v.vendor_exact %}
+              <a href="{{ url_for('bills.list_bills', vendor=v.vendor_exact) }}">{{ v.label }}</a>
+            {% else %}
+              {{ v.label }}
+            {% endif %}
+          </td>
+          <td style="text-align:right">{{ v.bill_count }}</td>
+          <td>{{ v.oldest_bill_date or '—' }}</td>
+          <td style="text-align:right">{{ money(v.open_cents) }}</td>
+          <td style="text-align:right">{{ pct(v.pct) }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="total-row">
+          <td><strong>TOTAL</strong></td>
+          <td style="text-align:right"><strong>{{ v_total_n }}</strong></td>
+          <td></td>
+          <td style="text-align:right"><strong>{{ money(v_total_c) }}</strong></td>
+          <td style="text-align:right"><strong>{% if v_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <p class="note footer-stamp">Snapshot generated {{ today_iso }}. Same data, same totals as the Excel export.</p>
+</div>
+{% endblock %}

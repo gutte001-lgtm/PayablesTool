@@ -19,6 +19,9 @@ payables.db.bak*
 exports/*
 !exports/.gitkeep
 
+# Local screenshot/PDF artifacts (regenerable, attached to PRs by hand)
+screenshots/
+
 # Editor / tooling cruft
 .claude/
 *.bak
