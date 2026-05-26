@@ -13,6 +13,7 @@
     {% if current_user.is_authenticated %}
       <nav class="topnav">
         <a href="{{ url_for('bills.list_bills') }}">Bills</a>
+        <a href="{{ url_for('summary.summary') }}">Summary</a>
         {% if current_user.has_role('ap_clerk', 'controller') %}
           <a href="{{ url_for('bills.inbox') }}">Inbox{% if nav_tag_count %}
             <span class="navbadge" title="{{ nav_tag_count }} active tag(s) for you">{{ nav_tag_count }}</span>{% endif %}</a>

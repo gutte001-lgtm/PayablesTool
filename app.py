@@ -26,6 +26,7 @@ from bills import init_bills
 from exports import init_exports
 from followup import init_followup
 from payruns import init_payruns
+from summary import init_summary
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -55,6 +56,7 @@ init_bills(app)
 init_followup(app)
 init_payruns(app)
 init_exports(app)
+init_summary(app)
 
 
 @app.context_processor

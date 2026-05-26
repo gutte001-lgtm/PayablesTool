@@ -148,7 +148,62 @@ Two exports, both via openpyxl, both matching the uploaded sample `Payment_Run_-
 Both exports stamped with the PayRun id and export timestamp on a footer line. Saved into `/exports/` and made available for download from the pay run detail page.
 
 ### Phase 6 — Spend summary (`claude/phase-6-summary`)
-Dashboard at `/summary`: open AP by `app_category`, by vendor (top 20), by payment method, by week-due. Pivot live from current bill data, not from any pay run. Export button for each pivot.
+
+Dashboard at `/summary`: a CFO-review briefing for pay-run prep. Joe reviews
+before proposing a run; CFO reviews before approving. CEO receives the Excel
+export by email (no CEO login in v1). One landscape-printable page, four
+sections, all tied to the same Open-AP grand total. Read-only over `bill` +
+`bill_metadata`; no schema change, no migration, no DB writes.
+
+**Open AP** = `open_balance_cents > 0 AND is_paid = 0`, summing
+`open_balance_cents` — same convention as `bills.py` / `followup.py`.
+
+Sections (in `summary.py` + `templates/summary.html`):
+
+1. **Header band** — Total Open AP, open bill count, Uncategorized count
+   (links to `/bills?uncat=1`), "As of <last sync>" pulled from the latest
+   `audit_log` row `action='sync_run'` (the same canonical source
+   `/admin/sync` uses via `admin._latest_sync`; falls back to
+   `MAX(bill.last_synced_at)`).
+2. **Aging** — `Current` / `1–30` / `31–60` / `61–90` / `90+` days past due,
+   plus a separate `No due date` row for bills with NULL `due_date`.
+   Server-side `date.today()` as the anchor; `dpd ≤ 0 → Current`,
+   `dpd ≥ 91 → 90+`. The six-row footer ties to the header Total.
+3. **Categories** — by `bill_metadata.app_category` (NULL → `Uncategorized`);
+   sorted Open $ desc with `Uncategorized` pinned to the bottom (a hygiene
+   flag, not a real category). Category names link to
+   `/bills?app_category=<X>`.
+4. **Top 20 vendors** — by `bill.vendor`, sorted Open $ desc, plus an
+   `All other vendors (N)` reconciling row so the column ties to the grand
+   total. Vendor names link to `/bills?vendor=<X>` — a new ~3-line exact
+   filter added to `bills.py` for this drill-down (mirrors the existing
+   `?app_category=` filter).
+
+**Print:** an `@media print` block in `static/style.css` hides
+topbar/nav/actions/flashes, strips link decoration, sets landscape `@page`
+with `0.5in` margins, and uses `page-break-inside: avoid` per section.
+Verified via a Playwright Chromium print-preview capture
+(`screenshots/phase6_summary_print.{png,pdf}`, gitignored).
+
+**Excel export:** single in-memory `.xlsx` at `GET /summary/export.xlsx`,
+four sheets (Summary / Aging / Categories / Top Vendors); filename
+`MRP_AP_Summary_YYYY-MM-DD.xlsx`. Snapshot-on-demand, not written to
+`exports/` and not audited (this is read-only analytics, not a financial
+artifact of record like the Phase 5 CFO/CEO pay-run exports). All four
+sheets set up for landscape print so the emailed CEO copy prints cleanly.
+
+**Access:** `@login_required` for all working roles (ap_clerk, controller,
+cfo); nav link visible to those three. CEO has no login in v1.
+
+**Out of scope for v1** (defer to v1.1 if needed): payment-method pivot
+(~100% NULL today per [`WAREHOUSE_PAYMENT_METHOD_FINDINGS.md`](WAREHOUSE_PAYMENT_METHOD_FINDINGS.md)
+— QB stores no method for unpaid bills, fills in once the team starts setting
+methods); week-due bucketing (aging covers "overdue"; pay-run workflow covers
+"coming due"); "as-of" date picker / historical snapshots; drill-down beyond
+the simple filtered-list links on category/vendor names; charts / sparklines;
+caching layer (live query each request; 240 open bills doesn't need it).
+
+Tests: `test_phase_6_summary.py`.
 
 ### Phase 7 — GL rules engine (`claude/phase-7-rules`)
 **Shipped (engine in Phase 1b; rules authored + loaded in Phase 5).** The
