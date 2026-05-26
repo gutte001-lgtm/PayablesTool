@@ -121,6 +121,11 @@ def _build_filters(args, for_kpi=False):
     if cat:
         conds.append("m.app_category = ?"); params.append(cat)
 
+    vendor = args.get("vendor", "")
+    state["vendor"] = vendor
+    if vendor:
+        conds.append("b.vendor = ?"); params.append(vendor)
+
     ast = args.get("approval_state", "")
     state["approval_state"] = ast
     if ast:
@@ -240,7 +245,7 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
 
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     # filter-only params (no sort/dir/page) for building sort + pagination links
-    fparams = {k: v for k in ("status", "classification", "app_category",
+    fparams = {k: v for k in ("status", "classification", "app_category", "vendor",
                "approval_state", "ok_for_ceo", "rush", "future", "uncat", "due", "q")
                for v in [state.get(k)] if v}
     return render_template(
