@@ -180,11 +180,15 @@ def promote_debt_service_due(conn, today, now):
         (today,)).fetchall()
     promoted = [r["qb_bill_id"] for r in rows]
     if promoted:
+        # Cleanup C (4.6): do NOT wipe classified_by. The stamp means "a human
+        # touched this"; auto-promote overriding due_state (zero-tolerance for
+        # late debt payments -- intended) must not erase who touched the bill.
+        # The due_state flip is still audited as a system action (changed_by=NULL).
         conn.execute(
-            "UPDATE bill_metadata SET due_state='due', classified_by=NULL, "
-            "classified_at=? WHERE obligation_type='debt_service' "
-            "AND due_state='not_due' AND invoice_due_date IS NOT NULL "
-            "AND invoice_due_date <= ?", (now, today))
+            "UPDATE bill_metadata SET due_state='due', classified_at=? "
+            "WHERE obligation_type='debt_service' AND due_state='not_due' "
+            "AND invoice_due_date IS NOT NULL AND invoice_due_date <= ?",
+            (now, today))
         for bid in promoted:
             log_classification_change(conn, bid, "due_state", "not_due", "due",
                                       None, now)

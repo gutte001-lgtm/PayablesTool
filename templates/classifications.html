@@ -32,6 +32,22 @@
     {% endfor %}
   </table>
 
+  <!-- System overrides (Visibility B): auto-promote ran over a human setting -->
+  {% if overrides %}
+  <h2>System overrides <span class="count">{{ overrides|length }} — auto-promote over a human setting</span></h2>
+  <p class="note no-print">Debt-service installments auto-promoted to <em>due</em> (zero-tolerance for lateness) on a bill a human had already classified/touched. The promotion wins by policy — this is just so the override isn't silent.</p>
+  <table class="grid">
+    <tr><th>When</th><th>Vendor</th><th>What happened</th></tr>
+    {% for o in overrides %}
+    <tr>
+      <td>{{ o.changed_at }}</td>
+      <td><a href="{{ url_for('bills.detail', bill_id=o.bill_id) }}">{{ o.vendor or o.bill_id }}</a></td>
+      <td>due state auto-promoted <code>not due → due</code> (system)</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
   <!-- Open not-real-AP -->
   <h2>Open not-real-AP <span class="count">{{ not_real|length }} — defend to CEO</span></h2>
   <p class="note no-print">Bills flagged not-real (deposits, placeholders). These are excluded from AP and from pay runs; the reason is what the CFO defends to the CEO.</p>

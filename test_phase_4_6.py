@@ -201,6 +201,7 @@ else:
         for u, name, role in USERS:
             cn.execute("INSERT INTO users (username,name,role,password_hash,is_active) "
                        "VALUES (?,?,?,?,1)", (u, name, role, PW))
+        init_db.seed_classification_reasons(cn)  # classify route validates reasons
         cn.commit(); cn.close()
 
     from app import app  # noqa: E402
@@ -265,6 +266,131 @@ else:
           any("VendorELIG" in str(v) for v in vals))
     check("export fence: the not_due bill (VendorNOTDUE) is NOT on the export",
           not any("VendorNOTDUE" in str(v) for v in vals))
+
+    # ---------- item-6 guard: adversarial sequences (folded from scratch) ------
+    # Each drives the REAL classify route (stamps classified_by) and a realistic
+    # sync (bill_reduces_liability -> _ensure_metadata update path -> promote).
+    print("=" * 60); print("test_item6_guard_adversarial"); print("=" * 60)
+    import classifications  # noqa: E402
+    FUTURE_INV, PAST_INV = "2099-01-01", "2020-01-01"
+    TODAY_ISO = date.today().isoformat()
+
+    def rc():
+        cn = sqlite3.connect(db.DB_PATH); cn.row_factory = sqlite3.Row; return cn
+
+    def adv_line(bid, acct):
+        cn = rc()
+        cn.execute("DELETE FROM bill_line WHERE qb_bill_id=?", (bid,))
+        cn.execute("INSERT INTO bill_line (qb_bill_id,line_number,gl_account_name,"
+                   "gl_account_number,gl_account_number_canonical,line_amount_cents) "
+                   "VALUES (?,?,?,?,?,?)", (bid, 1, acct, acct, acct, 10000))
+        cn.commit(); cn.close()
+
+    def adv_seed(bid, acct, invoice=FUTURE_INV):
+        cn = rc()
+        cn.execute("INSERT INTO bill (qb_bill_id,vendor,bill_number,amount_cents,"
+                   "open_balance_cents,bill_date,due_date,is_paid,last_synced_at) "
+                   "VALUES (?,?,?,?,?,?,?,0,?)",
+                   (bid, "V" + bid, "B" + bid, 10000, 10000, "2026-04-01", invoice, "t"))
+        cn.execute("INSERT INTO bill_metadata (qb_bill_id,approval_state,obligation_type,"
+                   "due_state,invoice_due_date,expected_payment_date,created_at,updated_at) "
+                   "VALUES (?,?,?,?,?,?,?,?)",
+                   (bid, "Controller_Reviewed", "ordinary_ap", "not_due", invoice,
+                    invoice, "t", "t"))
+        cn.commit(); cn.close()
+        adv_line(bid, acct)
+
+    def adv_sync(bid):
+        cn = rc()
+        lines = [dict(r) for r in cn.execute(
+            "SELECT gl_account_number, gl_account_number_canonical FROM bill_line "
+            "WHERE qb_bill_id=?", (bid,))]
+        is_debt = sync.bill_reduces_liability(lines)
+        idd = cn.execute("SELECT invoice_due_date FROM bill_metadata WHERE qb_bill_id=?",
+                         (bid,)).fetchone()[0]
+        sync._ensure_metadata(cn, bid, None, None, False, sync._now_iso(),
+                              invoice_due_date=idd, is_debt_service=is_debt)
+        sync.promote_debt_service_due(cn, TODAY_ISO, sync._now_iso())
+        cn.commit(); cn.close()
+
+    def adv_st(bid):
+        cn = rc()
+        m = cn.execute("SELECT obligation_type,due_state,classified_by FROM bill_metadata "
+                       "WHERE qb_bill_id=?", (bid,)).fetchone()
+        n = cn.execute("SELECT COUNT(*) FROM classification_audit WHERE bill_id=? "
+                       "AND field='obligation_type'", (bid,)).fetchone()[0]
+        cn.close()
+        return m["obligation_type"], m["due_state"], m["classified_by"], n
+
+    fresh_route_db()
+
+    # 1 — human override survives repeated syncs
+    adv_seed("A1", "26110"); adv_sync("A1")
+    check("adv1: auto-detect -> debt_service", adv_st("A1")[0] == "debt_service")
+    client("joe").post("/bills/A1/classify", data={"obligation_type": "ordinary_ap"})
+    for _ in range(3):
+        adv_sync("A1")
+    o, _, cb, _ = adv_st("A1")
+    check("adv1: human ordinary_ap survives 3 syncs", o == "ordinary_ap")
+    check("adv1: human stamp persists", cb is not None)
+
+    # 2 — auto-detect idempotent, one audit row
+    adv_seed("A2", "26110"); adv_sync("A2")
+    for _ in range(5):
+        adv_sync("A2")
+    o, _, _, n = adv_st("A2")
+    check("adv2: stays debt_service", o == "debt_service")
+    check("adv2: exactly ONE obligation_type audit row (no per-sync spam)", n == 1)
+
+    # 3 — auto-detect leaves classified_by NULL; human choice protected
+    adv_seed("A3", "26110"); adv_sync("A3")
+    o, _, cb, _ = adv_st("A3")
+    check("adv3: auto-detect leaves classified_by NULL", cb is None and o == "debt_service")
+    client("joe").post("/bills/A3/classify", data={"obligation_type": "ordinary_ap"})
+    for _ in range(2):
+        adv_sync("A3")
+    o, _, cb, _ = adv_st("A3")
+    check("adv3: human choice protected through syncs", o == "ordinary_ap" and cb is not None)
+
+    # 4a — human-classified bill not flipped by recode to 26110
+    adv_seed("A4", "56100")  # non-liability
+    client("joe").post("/bills/A4/classify",
+                       data={"obligation_type": "ordinary_ap", "due_state": "due",
+                             "classification_reason": "other"})
+    adv_line("A4", "26110")  # vendor recode -> now hits liability
+    adv_sync("A4")
+    o, _, cb, _ = adv_st("A4")
+    check("adv4a: human-classified bill NOT flipped by recode", o == "ordinary_ap" and cb is not None)
+
+    # 5a — clerk due_state flip on debt bill; obligation untouched
+    adv_seed("A5", "26110"); adv_sync("A5")
+    client("marilyn").post("/bills/A5/classify",
+                           data={"obligation_type": "debt_service", "due_state": "due",
+                                 "classification_reason": "debt_service"})
+    adv_sync("A5")
+    o, d, cb, _ = adv_st("A5")
+    check("adv5a: obligation stays debt_service", o == "debt_service")
+    check("adv5a: due_state stays the human's value (due)", d == "due")
+    check("adv5a: clerk stamp persists", cb is not None)
+
+    # 5b — INTENDED zero-tolerance override + Cleanup C (stamp survives)
+    adv_seed("A6", "26110", invoice=PAST_INV); adv_sync("A6")  # past -> promote -> due
+    client("marilyn").post("/bills/A6/classify",
+                           data={"obligation_type": "debt_service", "due_state": "not_due",
+                                 "classification_reason": "debt_service"})  # human "hold"
+    o, d, cb, _ = adv_st("A6")
+    check("adv5b: human set due_state=not_due and is stamped", d == "not_due" and cb is not None)
+    human_id = cb
+    adv_sync("A6")  # promote overrides (zero-tolerance)
+    o, d, cb, _ = adv_st("A6")
+    check("adv5b INTENDED: past-due debt not_due overridden to due by promote",
+          d == "due" and o == "debt_service")
+    check("adv5b CLEANUP C: classified_by SURVIVES the override (not nulled)",
+          cb == human_id)
+    cn = rc()
+    overridden = {r["bill_id"] for r in classifications._system_overrides(cn)}
+    cn.close()
+    check("adv5b VISIBILITY B: the override surfaces on /classifications", "A6" in overridden)
 
 
 # ====================================================================

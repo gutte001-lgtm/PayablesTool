@@ -53,6 +53,24 @@ def _changes_since(conn, since_iso, limit=200):
         (since_iso, limit)).fetchall()
 
 
+def _system_overrides(conn, limit=50):
+    """Auto-promote events that overrode a human-touched bill (Visibility B):
+    a system due_state not_due->due promotion (changed_by IS NULL) on a bill that
+    already had an earlier human classification row. Surfaces the zero-tolerance
+    debt-service promotions that ran over a value a human had set, so the CFO can
+    see the override instead of it being silent."""
+    return conn.execute(
+        "SELECT c.id, c.bill_id, c.changed_at, b.vendor "
+        "FROM classification_audit c "
+        "JOIN bill b ON b.qb_bill_id = c.bill_id "
+        "WHERE c.field='due_state' AND c.from_value='not_due' AND c.to_value='due' "
+        "  AND c.changed_by IS NULL "
+        "  AND EXISTS (SELECT 1 FROM classification_audit h "
+        "              WHERE h.bill_id = c.bill_id AND h.changed_by IS NOT NULL "
+        "                AND h.id < c.id) "
+        "ORDER BY c.id DESC LIMIT ?", (limit,)).fetchall()
+
+
 def _open_not_real(conn):
     return conn.execute(
         "SELECT b.qb_bill_id, b.vendor, b.bill_number, b.open_balance_cents, "
@@ -115,6 +133,7 @@ def review():
         "classifications.html",
         changes=_changes_since(conn, since),
         since=since or None,
+        overrides=_system_overrides(conn),
         not_real=_open_not_real(conn),
         flips=flips,
         flat=_flat_list(conn, q),
