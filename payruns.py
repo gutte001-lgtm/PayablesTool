@@ -79,6 +79,34 @@ def claimed_bill_ids(conn):
         "WHERE included=1 AND line_state<>'Rejected'")}
 
 
+def _fence_gates():
+    """Single source of truth for the pay-run candidate fence (Phase 4.5).
+
+    Each gate is (key, human_label, passes_sql, params) where `passes_sql` is a
+    SQL fragment that is TRUE when a bill PASSES the gate. candidate_bills ANDs
+    every gate's passes_sql (so a candidate must clear all of them);
+    picker_diagnostic negates each to count open bills that FAIL it. Defining
+    them once here is what stops the candidate query and the diagnostic from
+    drifting -- do not re-inline these predicates anywhere.
+
+    NOT covered here (applied directly by candidate_bills): the open-balance
+    check `b.open_balance_cents>0` (the candidate/diagnostic universe), and the
+    Python-side filters claimed-by-another-run / already-on-this-run."""
+    excl = ",".join("?" * len(bills.CEO_EXCLUDED))
+    return [
+        ("approval", "not yet Controller-reviewed (still New / AP-Reviewed)",
+         "m.approval_state = 'Controller_Reviewed'", ()),
+        ("classification",
+         "an excluded classification (Refund-Visibility / Prepayment-Deposit)",
+         f"(m.classification IS NULL OR m.classification NOT IN ({excl}))",
+         tuple(bills.CEO_EXCLUDED)),
+        ("due", "not yet due (due_state = not_due)",
+         "m.due_state = 'due'", ()),
+        ("obligation", "not real AP (obligation_type = not_real_ap)",
+         "m.obligation_type IN ('ordinary_ap', 'debt_service')", ()),
+    ]
+
+
 def candidate_bills(conn, run_id):
     """Controller_Reviewed + open bills eligible to add to this run: not a
     pay-run-excluded classification, not already claimed by another run, not
@@ -99,19 +127,18 @@ def candidate_bills(conn, run_id):
     claimed = claimed_bill_ids(conn)            # actively claimed by ANY run
     on_this_run = {r["qb_bill_id"] for r in conn.execute(
         "SELECT qb_bill_id FROM pay_run_line WHERE pay_run_id=?", (run_id,))}
-    excl = ",".join("?" * len(bills.CEO_EXCLUDED))
+    gates = _fence_gates()
+    fence_sql = " AND ".join(g[2] for g in gates)
+    fence_params = tuple(p for g in gates for p in g[3])
     rows = conn.execute(
         f"""SELECT b.qb_bill_id, b.vendor, b.bill_number, b.bill_date, b.due_date,
                    b.amount_cents, b.open_balance_cents,
                    m.classification, m.proposed_payment_method,
                    m.obligation_type, m.due_state
             FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
-            WHERE m.approval_state='Controller_Reviewed' AND b.open_balance_cents>0
-              AND (m.classification IS NULL OR m.classification NOT IN ({excl}))
-              AND m.due_state='due'
-              AND m.obligation_type IN ('ordinary_ap','debt_service')
+            WHERE b.open_balance_cents>0 AND {fence_sql}
             ORDER BY b.vendor, b.bill_number""",
-        tuple(bills.CEO_EXCLUDED)).fetchall()
+        fence_params).fetchall()
     ids = [r["qb_bill_id"] for r in rows]
     open_items = tags.open_item_counts_for_bills(conn, ids)
     tag_counts = tags.tag_counts_for_bills(conn, ids)
@@ -126,6 +153,40 @@ def candidate_bills(conn, run_id):
         d["tag_count"] = tag_counts.get(r["qb_bill_id"], 0)
         out.append(d)
     return out
+
+
+def picker_diagnostic(conn, run_id):
+    """Read-only: explain WHY open bills aren't pay-run candidates, for the Draft
+    picker. Counts open bills (open_balance_cents>0 -- the picker's universe)
+    that FAIL each fence gate; counts are independent (one bill can fail several
+    gates). Reuses the SAME _fence_gates() predicates as candidate_bills, negated,
+    so the two can't drift. Also counts open bills already claimed by another run.
+    Pure read -- changes no state and writes nothing.
+
+    Returns {open_total, reasons:[{key,label,count}]} (reasons omits zero counts)."""
+    open_total = conn.execute(
+        "SELECT COUNT(*) FROM bill WHERE open_balance_cents > 0").fetchone()[0]
+    reasons = []
+    for key, label, passes, params in _fence_gates():
+        n = conn.execute(
+            f"SELECT COUNT(*) FROM bill b JOIN bill_metadata m "
+            f"ON m.qb_bill_id = b.qb_bill_id "
+            f"WHERE b.open_balance_cents > 0 AND NOT ({passes})", params).fetchone()[0]
+        if n:
+            reasons.append({"key": key, "label": label, "count": n})
+    # Python-side fence (not in the SQL gates): open bills already claimed by
+    # another run. on-this-run is excluded since those aren't "missing".
+    claimed = claimed_bill_ids(conn) - {
+        r["qb_bill_id"] for r in conn.execute(
+            "SELECT qb_bill_id FROM pay_run_line WHERE pay_run_id=?", (run_id,))}
+    if claimed:
+        open_ids = {r[0] for r in conn.execute(
+            "SELECT qb_bill_id FROM bill WHERE open_balance_cents > 0")}
+        n = len(claimed & open_ids)
+        if n:
+            reasons.append({"key": "claimed", "label": "already claimed by another run",
+                            "count": n})
+    return {"open_total": open_total, "reasons": reasons}
 
 
 def lines_for_run(conn, run_id):
@@ -229,6 +290,7 @@ def detail(run_id):
     grouped = grouped_lines(conn, run_id)
     is_draft = run["status"] == "Draft"
     candidates = candidate_bills(conn, run_id) if is_draft else []
+    diagnostic = picker_diagnostic(conn, run_id) if is_draft else None
     # who can review lines right now?
     review_roles = LINE_REVIEW.get(run["status"], ())
     can_review = current_user.has_role(*review_roles) if review_roles else False
@@ -240,6 +302,7 @@ def detail(run_id):
             break
     return render_template(
         "payrun_detail.html", run=run, grouped=grouped, candidates=candidates,
+        diagnostic=diagnostic,
         is_draft=is_draft, can_edit=current_user.has_role("ap_clerk", "controller"),
         can_review=can_review, next_action=next_action, methods=bills.METHODS)
 
