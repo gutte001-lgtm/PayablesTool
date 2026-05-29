@@ -18,6 +18,7 @@ everything starts Uncategorized until rules are authored against real data.
 """
 
 import sys
+from pathlib import Path
 
 from dotenv import dotenv_values
 from werkzeug.security import generate_password_hash
@@ -397,6 +398,33 @@ def seed_classification_reasons(conn) -> list:
     return created
 
 
+def _load_migration_007():
+    """Load migration 007 by file path. Its module name starts with a digit, so
+    it can't be a normal `import`; importlib by path is the established pattern
+    (the phase tests load migrations the same way). Returns the module, which
+    exposes GL_RULES + seed_gl_rules()."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "migrations" / "007_codify_gl_rules.py"
+    spec = importlib.util.spec_from_file_location(
+        "migration_007_codify_gl_rules", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def seed_gl_rules(conn) -> list:
+    """Seed the codified GL categorization rule set (the same 26 rules frozen in
+    migrations/007_codify_gl_rules.py). Idempotent, natural-key guarded on
+    (match_type, match_value). Delegates to that migration's seed_gl_rules() --
+    the single source of truth -- so a fresh DB (init_db.py) and a migrated DB
+    converge on an identical rule set. Returns the list of (match_type,
+    match_value) inserted this run. Mirrors the pills/reasons dual-seed pattern,
+    but uses a NOT-EXISTS guard rather than INSERT OR IGNORE because gl_rule has
+    no UNIQUE constraint on its natural key."""
+    inserted, _skipped = _load_migration_007().seed_gl_rules(conn, verbose=False)
+    return inserted
+
+
 def seed_users(conn) -> list:
     """Insert any missing seed users. Returns the list of usernames created
     this run (empty if all already existed)."""
@@ -439,6 +467,7 @@ def init() -> None:
         created = seed_users(conn)
         pills_created = seed_status_pills(conn)
         reasons_created = seed_classification_reasons(conn)
+        gl_rules_created = seed_gl_rules(conn)
         rows = conn.execute(
             "SELECT username, role, is_active FROM users ORDER BY id"
         ).fetchall()
@@ -454,6 +483,8 @@ def init() -> None:
     print(f"seeded this run: {created or 'none (all already present)'}")
     print(f"status pills seeded this run: {pills_created or 'none (all already present)'}")
     print(f"classification reasons seeded this run: {reasons_created or 'none (all already present)'}")
+    print(f"gl rules seeded this run: {len(gl_rules_created)} of {len(_load_migration_007().GL_RULES)} "
+          f"({'all already present' if not gl_rules_created else 'new'})")
     print("users:")
     for r in rows:
         state = "active" if r["is_active"] else "inactive (no login v1)"
