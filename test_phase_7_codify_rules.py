@@ -161,26 +161,31 @@ check("007->005 count is 26 (no GENERAL ADMIN dup)", _count(p) == 26)
 # --------------------------------------------------------------------------
 print("=" * 60); print("init_db.seed_gl_rules == migration"); print("=" * 60)
 
-# DB 1: rules loaded via init_db.seed_gl_rules().
+# DB 1: rules loaded via init_db.seed_gl_rules() (007's 26 + 008's additions).
 p_init = _fresh_db()
 cn = sqlite3.connect(p_init)
 created = init_db.seed_gl_rules(cn)
 cn.close()
-check("init_db.seed_gl_rules() inserts 26", len(created) == 26)
+init_set = _rules(p_init)
+# init_db seeds the full committed set (007 + 008), so it is a SUPERSET of 007's
+# 26. The exact 007==migration parity is asserted below; the full 30-rule
+# init_db==migrations parity lives in test_phase_8_close_uncat_rules.py.
+check("init_db.seed_gl_rules() contains all 26 codified (007) rules",
+      all(init_set.get(k) == v for k, v in EXPECTED.items()))
 
-# DB 2: rules loaded via the migration.
+# DB 2: rules loaded via the 007 migration alone -> exactly the 26.
 p_mig = _fresh_db()
 mig007.migrate(p_mig, verbose=False)
+check("007 migration alone reproduces exactly the 26 codified rules",
+      _rules(p_mig) == EXPECTED)
 
-check("init_db path and migration path produce IDENTICAL rule sets",
-      _rules(p_init) == _rules(p_mig) == EXPECTED)
-
-# init_db.seed_gl_rules() is itself idempotent.
+# init_db.seed_gl_rules() is itself idempotent (no dupes on rerun).
+cnt_before = _count(p_init)
 cn = sqlite3.connect(p_init)
 created2 = init_db.seed_gl_rules(cn)
 cn.close()
 check("init_db.seed_gl_rules() is idempotent (0 on rerun)", len(created2) == 0)
-check("init_db DB still 26 after rerun", _count(p_init) == 26)
+check("init_db rule count unchanged after rerun", _count(p_init) == cnt_before)
 
 # --------------------------------------------------------------------------
 print("=" * 60); print("clean-rebuild simulation"); print("=" * 60)

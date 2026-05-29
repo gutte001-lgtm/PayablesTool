@@ -398,30 +398,37 @@ def seed_classification_reasons(conn) -> list:
     return created
 
 
-def _load_migration_007():
-    """Load migration 007 by file path. Its module name starts with a digit, so
-    it can't be a normal `import`; importlib by path is the established pattern
-    (the phase tests load migrations the same way). Returns the module, which
-    exposes GL_RULES + seed_gl_rules()."""
+# The committed GL rule set is split across migrations: 007 froze the original
+# 26-rule snapshot; 008 added 4 rollup rules that close the Uncategorized bills.
+# Each exposes GL_RULES + seed_gl_rules(); init_db seeds them in order.
+_GL_RULE_MIGRATIONS = ("007_codify_gl_rules.py", "008_close_uncategorized_rules.py")
+
+
+def _load_migration(filename):
+    """Load a migration module by file path. Migration module names start with a
+    digit, so they can't be normal `import`s; importlib by path is the
+    established pattern (the phase tests load migrations the same way)."""
     import importlib.util
-    path = Path(__file__).resolve().parent / "migrations" / "007_codify_gl_rules.py"
+    path = Path(__file__).resolve().parent / "migrations" / filename
     spec = importlib.util.spec_from_file_location(
-        "migration_007_codify_gl_rules", path)
+        "migration_" + filename[:-3], path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
 def seed_gl_rules(conn) -> list:
-    """Seed the codified GL categorization rule set (the same 26 rules frozen in
-    migrations/007_codify_gl_rules.py). Idempotent, natural-key guarded on
-    (match_type, match_value). Delegates to that migration's seed_gl_rules() --
-    the single source of truth -- so a fresh DB (init_db.py) and a migrated DB
-    converge on an identical rule set. Returns the list of (match_type,
-    match_value) inserted this run. Mirrors the pills/reasons dual-seed pattern,
-    but uses a NOT-EXISTS guard rather than INSERT OR IGNORE because gl_rule has
-    no UNIQUE constraint on its natural key."""
-    inserted, _skipped = _load_migration_007().seed_gl_rules(conn, verbose=False)
+    """Seed the full committed GL categorization rule set (007's 26 + 008's 4).
+    Idempotent, natural-key guarded on (match_type, match_value). Delegates to
+    each migration's seed_gl_rules() -- the single source of truth -- so a fresh
+    DB (init_db.py) and a migrated DB converge on an identical rule set. Returns
+    the list of (match_type, match_value) inserted this run. Mirrors the
+    pills/reasons dual-seed pattern, but uses a NOT-EXISTS guard rather than
+    INSERT OR IGNORE because gl_rule has no UNIQUE constraint on its natural key."""
+    inserted = []
+    for filename in _GL_RULE_MIGRATIONS:
+        ins, _skipped = _load_migration(filename).seed_gl_rules(conn, verbose=False)
+        inserted += list(ins)
     return inserted
 
 
@@ -483,7 +490,8 @@ def init() -> None:
     print(f"seeded this run: {created or 'none (all already present)'}")
     print(f"status pills seeded this run: {pills_created or 'none (all already present)'}")
     print(f"classification reasons seeded this run: {reasons_created or 'none (all already present)'}")
-    print(f"gl rules seeded this run: {len(gl_rules_created)} of {len(_load_migration_007().GL_RULES)} "
+    _gl_total = sum(len(_load_migration(f).GL_RULES) for f in _GL_RULE_MIGRATIONS)
+    print(f"gl rules seeded this run: {len(gl_rules_created)} of {_gl_total} "
           f"({'all already present' if not gl_rules_created else 'new'})")
     print("users:")
     for r in rows:
