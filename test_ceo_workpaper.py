@@ -9,10 +9,16 @@ PART A (pure data): payruns.held_and_notdue_tiers() tier assignment on a fixture
   rejected-on-another-run, claimed-elsewhere, paid-this-run, not-yet-due, still-
   in-processing (New/AP), not_real_ap, excluded-classification, closed.
 
-(PART B render + PART C routes are added with the xlsx/route layer.)
+PART B (pure render): excel_payrun.group_by_category + build_ceo_workpaper_workbook
+  -- category subtotals tie to source rows; the workbook reloads cleanly.
+PART C (routes): temp DB + Flask client -- access gating (controller+cfo vs 403),
+  pre-lock (CFO_Approved) allowed + Draft refused, audit row, paid-tier grand
+  total == the run's payable total. Skipped if no SECRET_KEY in .env.
 
-The live payables.db is never touched.
+The live payables.db and the real exports/ dir are never touched.
 """
+import io
+import json
 import shutil
 import sqlite3
 import sys
@@ -34,6 +40,8 @@ sys.path.insert(0, str(ROOT))
 import init_db   # noqa: E402
 import bills      # noqa: E402
 import payruns    # noqa: E402
+import excel_payrun  # noqa: E402
+import openpyxl   # noqa: E402
 
 
 def _new_path():
@@ -138,6 +146,129 @@ check("New/AP bills are not in held or not_yet_due (footnote only)",
       "NEWBILL" not in absent and "APREV" not in absent)
 cn.close()
 
+
+print("=" * 60); print("PART B -- category grouping + workbook (pure render)"); print("=" * 60)
+p, cn = fixture()
+t = payruns.held_and_notdue_tiers(cn, 1)
+import exports as _exp  # noqa: E402
+paid = excel_payrun.payable_rows(_exp._run_lines(cn, 1), ceo=False)  # just PAID_THIS
+cn.close()
+
+held_blocks = excel_payrun.group_by_category(t["held"], "open_balance_cents")
+held_grand = next(b for b in held_blocks if b["kind"] == "grand_total")["subtotal_cents"]
+check("held grand total == sum of source open balances",
+      held_grand == sum(r["open_balance_cents"] for r in t["held"]))
+check("held category subtotals sum to the grand total",
+      sum(b["subtotal_cents"] for b in held_blocks if b["kind"] == "section") == held_grand)
+cats = {b["label"] for b in held_blocks if b["kind"] == "section"}
+check("held groups by app_category (Occupancy + Legal Fees + New Device Purchases)",
+      {"Occupancy", "Legal Fees", "New Device Purchases"} <= cats)
+
+wb = excel_payrun.build_ceo_workpaper_workbook(
+    {"id": 1, "name": "R1", "week_ending": "2026-05-21"},
+    paid, t["held"], t["not_yet_due"], "Joe", t["processing_count"])
+bio = io.BytesIO(); wb.save(bio); bio.seek(0)
+ws = openpyxl.load_workbook(bio)[excel_payrun.WORKPAPER_SHEET]
+colA = [ws.cell(r, 1).value for r in range(1, ws.max_row + 1)]
+check("workbook reloads cleanly + has the three tier bands",
+      "PAID THIS RUN" in colA and "HELD BY CHOICE" in colA and "NOT YET DUE" in colA)
+check("workbook footnote names the processing count",
+      any("processing" in str(v).lower() for v in colA if v))
+
+
+print("\n" + "=" * 60); print("PART C -- routes (temp DB + client)"); print("=" * 60)
+from dotenv import dotenv_values  # noqa: E402
+if not dotenv_values(ROOT / ".env").get("SECRET_KEY"):
+    print("SKIP: no SECRET_KEY in .env (pure tests above still ran)")
+else:
+    from werkzeug.security import generate_password_hash  # noqa: E402
+    import db          # noqa: E402
+    import exports     # noqa: E402
+    from app import app  # noqa: E402
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["TESTING"] = True
+    PW = generate_password_hash("testpw")
+    USERS = [("marilyn", "Marilyn", "ap_clerk"), ("joe", "Joe", "controller"),
+             ("shaun", "Shaun", "cfo")]
+    XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    def fresh_db():
+        d = Path(tempfile.mkdtemp()); _TMP.append(d)
+        db.DB_PATH = d / "wp.db"
+        c = sqlite3.connect(db.DB_PATH); c.executescript(init_db.SCHEMA)
+        for u, name, role in USERS:
+            c.execute("INSERT INTO users (username,name,role,password_hash,is_active) "
+                      "VALUES (?,?,?,?,1)", (u, name, role, PW))
+        c.commit(); c.close()
+        exp = d / "exports"; exp.mkdir(); exports.EXPORTS_DIR = exp
+        return exp
+
+    def _cnr():
+        c = sqlite3.connect(db.DB_PATH); c.row_factory = sqlite3.Row; return c
+
+    def login(u):
+        c = app.test_client(); c.post("/login", data={"username": u, "password": "testpw"}); return c
+
+    def seed_run(status):
+        c = _cnr()
+        cur = c.execute("INSERT INTO pay_run (name,week_ending,created_by,status,"
+                        "created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                        ("Run", "2026-05-22", None, status, "2026-05-22", "2026-05-22"))
+        c.commit(); rid = cur.lastrowid; c.close(); return rid
+
+    URL = "/pay-runs/{}/export/ceo-workpaper.xlsx"
+
+    # ---- pre-lock (CFO_Approved) allowed; paid total ties to run payable total ----
+    exp = fresh_db()
+    c = _cnr()
+    add_bill(c, "p1", cat="Occupancy"); add_bill(c, "p2", cat="Legal Fees")
+    add_bill(c, "h1", cat="Parts & Products")          # eligible parked -> held
+    c.commit(); c.close()
+    rid = seed_run("CFO_Approved")
+    c = _cnr(); add_line(c, rid, "p1", amount=10000); add_line(c, rid, "p2", amount=20000)
+    c.commit(); c.close()
+    r = login("shaun").get(URL.format(rid))
+    check("route: CFO_Approved (pre-lock) export 200", r.status_code == 200)
+    check("route: content-type is xlsx", r.headers.get("Content-Type", "").startswith(XLSX))
+    f = list(exp.glob(f"PayRun_{rid}_CEO_Workpaper_2026-05-22_v01.xlsx"))
+    check("route: versioned _v01 workpaper file written", len(f) == 1)
+    ws = openpyxl.load_workbook(io.BytesIO(r.data))[excel_payrun.WORKPAPER_SHEET]
+    colA = [ws.cell(rr, 1).value for rr in range(1, ws.max_row + 1)]
+    paid_total, in_paid = None, False
+    for rr in range(1, ws.max_row + 1):
+        v = ws.cell(rr, 1).value
+        if v == "PAID THIS RUN":
+            in_paid = True
+        elif v in ("HELD BY CHOICE", "NOT YET DUE"):
+            in_paid = False
+        elif in_paid and v == "TOTAL":
+            paid_total = ws.cell(rr, excel_payrun._WP_AMOUNT_COL).value
+    check("route: paid-tier TOTAL == run payable total (300.00)", paid_total == 300.0)
+    check("route: held tier shows the parked bill's category (Parts & Products)",
+          "Parts & Products" in colA)
+
+    c = _cnr()
+    a = c.execute("SELECT after FROM audit_log WHERE action='pay_run_exported' "
+                  "ORDER BY id DESC LIMIT 1").fetchone()
+    c.close()
+    ap = json.loads(a["after"])
+    check("route: audit row written with export=ceo_workpaper + paid_total_cents",
+          ap.get("export") == "ceo_workpaper" and ap.get("generated_by") == "Shaun"
+          and ap.get("paid_total_cents") == 30000)
+
+    # ---- access gating ----
+    check("route: controller allowed (200)", login("joe").get(URL.format(rid)).status_code == 200)
+    check("route: ap_clerk forbidden (403)", login("marilyn").get(URL.format(rid)).status_code == 403)
+
+    # ---- Draft refused, no file ----
+    exp2 = fresh_db()
+    c = _cnr(); add_bill(c, "d1", cat="Occupancy"); c.commit(); c.close()
+    rid2 = seed_run("Draft")
+    c = _cnr(); add_line(c, rid2, "d1"); c.commit(); c.close()
+    rd = login("shaun").get(URL.format(rid2))
+    check("route: Draft run refused (302), writes no file",
+          rd.status_code == 302 and not list(exp2.glob("*.xlsx")))
+
 # ====================================================================
 for d in _TMP:
     shutil.rmtree(d, ignore_errors=True)
@@ -145,5 +276,5 @@ print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): " + "; ".join(FAILURES))
 else:
-    print("ALL CEO-WORKPAPER (PART A) CHECKS PASSED")
+    print("ALL CEO-WORKPAPER CHECKS PASSED")
 sys.exit(len(FAILURES))

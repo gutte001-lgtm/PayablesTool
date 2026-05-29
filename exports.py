@@ -19,6 +19,7 @@ from flask_login import current_user
 
 import db
 import excel_payrun
+import payruns                   # held_and_notdue_tiers (CEO workpaper tiers 2/3)
 import sync                      # log_audit (route layer owns the audit trail)
 from auth import role_required
 
@@ -115,3 +116,48 @@ def export_cfo(run_id):
 @role_required("cfo")
 def export_ceo(run_id):
     return _generate(run_id, ceo=True)
+
+
+# Pre-lock states the CEO workpaper may be generated in. Unlike the cfo/ceo
+# check-run exports (Locked-only, because they drive disbursement), the
+# workpaper is a discussion/review artifact and is allowed from CFO_Approved on.
+_WORKPAPER_STATUSES = ("CFO_Approved", "Locked")
+
+
+@bp.route("/pay-runs/<int:run_id>/export/ceo-workpaper.xlsx")
+@role_required("controller", "cfo")
+def export_ceo_workpaper(run_id):
+    conn = db.get_db()
+    run = conn.execute("SELECT * FROM pay_run WHERE id=?", (run_id,)).fetchone()
+    if not run:
+        abort(404)
+    if run["status"] not in _WORKPAPER_STATUSES:
+        flash("The CEO workpaper is available once the run is CFO-approved.", "error")
+        return redirect(url_for("payruns.detail", run_id=run_id))
+
+    # Tier 1 PAID THIS RUN: the existing payable-lines query, so the paid-tier
+    # grand total ties to the CFO export total by construction.
+    paid = excel_payrun.payable_rows(_run_lines(conn, run_id), ceo=False)
+    # Tiers 2 (HELD BY CHOICE) + 3 (NOT YET DUE) + processing footnote.
+    tiers = payruns.held_and_notdue_tiers(conn, run_id)
+
+    wb = excel_payrun.build_ceo_workpaper_workbook(
+        run, paid, tiers["held"], tiers["not_yet_due"],
+        current_user.name, tiers["processing_count"])
+
+    prefix = f"PayRun_{run_id}_CEO_Workpaper_{_datestr(run)}"
+    version, filename = _next_version(prefix)
+    path = EXPORTS_DIR / filename
+    wb.save(path)
+
+    paid_total_cents = sum((r.get("amount_to_pay_cents") or 0) for r in paid)
+    sync.log_audit(conn, current_user.id, "pay_run", run_id, "pay_run_exported",
+                   None, {"export": "ceo_workpaper", "filename": filename,
+                          "version": version, "paid_total_cents": paid_total_cents,
+                          "held_count": len(tiers["held"]),
+                          "not_yet_due_count": len(tiers["not_yet_due"]),
+                          "processing_count": tiers["processing_count"],
+                          "generated_by": current_user.name})
+    conn.commit()
+    return send_file(path, as_attachment=True, download_name=filename,
+                     mimetype=_XLSX_MIME)
