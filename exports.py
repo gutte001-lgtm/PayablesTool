@@ -32,11 +32,17 @@ SELECT pl.id AS line_id, pl.qb_bill_id, pl.payment_method, pl.amount_to_pay_cent
        pl.included, pl.line_state, pl.cfo_note,
        b.vendor, b.bill_number, b.bill_date, b.due_date, b.amount_cents, b.qb_memo,
        m.app_category, m.approver_name, m.approval_channel, m.approval_date,
-       m.receipt_delivery_date, m.ok_for_ceo
+       m.receipt_delivery_date, m.ok_for_ceo, m.obligation_type, m.due_state
 FROM pay_run_line pl
 JOIN bill b ON b.qb_bill_id = pl.qb_bill_id
 LEFT JOIN bill_metadata m ON m.qb_bill_id = pl.qb_bill_id
 WHERE pl.pay_run_id = ?
+  -- Phase 4.6 export fence (same predicate as the pay-run candidate fence):
+  -- a not_due or not_real_ap bill must NEVER appear on a check-run export, even
+  -- if it was reclassified after the run was locked. Belt-and-suspenders with
+  -- the add-time fence in payruns.candidate_bills.
+  AND m.obligation_type IN ('ordinary_ap', 'debt_service')
+  AND m.due_state = 'due'
 """
 
 

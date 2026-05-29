@@ -23,6 +23,7 @@ import tags
 from admin import init_admin
 from auth import init_auth
 from bills import init_bills
+from classifications import init_classifications
 from exports import init_exports
 from followup import init_followup
 from payruns import init_payruns
@@ -59,6 +60,7 @@ init_payruns(app)
 init_exports(app)
 init_summary(app)
 init_triage(app)
+init_classifications(app)
 
 
 def _money(cents):

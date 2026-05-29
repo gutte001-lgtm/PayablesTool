@@ -1,49 +1,48 @@
 {% extends "base.html" %}
-{% block title %}Spend Summary &middot; PayablesTool{% endblock %}
+{% block title %}AP Summary &middot; PayablesTool{% endblock %}
 {% macro pct(p) %}{{ "%.1f"|format(p or 0) }}%{% endmacro %}
 
 {% block content %}
 <div class="card summary-page">
   <div class="summary-head">
-    <h1>Spend Summary <span class="count">Open AP as of {{ header.as_of or 'never synced' }}</span></h1>
+    <h1>AP Summary <span class="count">by classification &middot; as of {{ as_of or 'never synced' }}</span></h1>
     <div class="summary-actions no-print">
       <a class="link-btn" href="{{ url_for('summary.export_xlsx') }}">⬇ Excel</a>
+      {% if current_user.has_role('controller', 'cfo') %}
+      <a class="link-btn" href="{{ url_for('summary.export_bod_ap') }}">⬇ BOD AP report</a>
+      {% endif %}
     </div>
   </div>
 
   <section class="summary-band">
     <div class="kpi">
-      <div class="kpi-label">Total Open AP</div>
-      <div class="kpi-value">{{ money(header.total_open_cents) }}</div>
+      <div class="kpi-label">Right Now AP <span class="note">(owe now)</span></div>
+      <div class="kpi-value">{{ money(right_now.total_cents) }}</div>
+      <div class="kpi-sub">{{ right_now.bill_count }} bills · ordinary AP, due</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Open bills</div>
-      <div class="kpi-value">{{ header.bill_count }}</div>
+      <div class="kpi-label">Pipeline / Contingent <span class="note">(coming)</span></div>
+      <div class="kpi-value">{{ money(pipeline.total_cents) }}</div>
+      <div class="kpi-sub">{{ pipeline.bill_count }} bills · not yet due + not-real</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Uncategorized</div>
-      <div class="kpi-value">
-        {% if header.uncategorized_count %}
-          <a href="{{ url_for('bills.list_bills', uncat='1') }}">{{ header.uncategorized_count }}</a>
-        {% else %}
-          0
-        {% endif %}
-      </div>
+      <div class="kpi-label">Debt Service <span class="note">(not in AP)</span></div>
+      <div class="kpi-value">{{ money(debt_service.total_cents) }}</div>
+      <div class="kpi-sub">{{ debt_service.bill_count }} installments</div>
     </div>
   </section>
 
+  <!-- ===================== Right Now AP ===================== -->
   <section class="summary-section">
-    <h2>Aging</h2>
+    <h2>Right Now AP <span class="count">{{ money(right_now.total_cents) }} · board-defensible</span></h2>
+    <p class="note no-print">Real vendor invoices that are payable right now (ordinary AP, due). Aged by the contractual invoice due date. Excludes debt service and not-real AP.</p>
     <table class="grid">
       <thead>
-        <tr><th>Bucket</th><th style="text-align:right">Bill count</th>
-            <th style="text-align:right">Open $</th>
-            <th style="text-align:right">% of total</th></tr>
+        <tr><th>Aging (invoice due date)</th><th style="text-align:right">Bills</th>
+            <th style="text-align:right">Open $</th><th style="text-align:right">% of section</th></tr>
       </thead>
       <tbody>
-        {% set ag_total_n = aging|sum(attribute='bill_count') %}
-        {% set ag_total_c = aging|sum(attribute='open_cents') %}
-        {% for b in aging %}
+        {% for b in right_now.aging %}
         <tr>
           <td>{{ b.label }}</td>
           <td style="text-align:right">{{ b.bill_count }}</td>
@@ -53,82 +52,90 @@
         {% endfor %}
         <tr class="total-row">
           <td><strong>TOTAL</strong></td>
-          <td style="text-align:right"><strong>{{ ag_total_n }}</strong></td>
-          <td style="text-align:right"><strong>{{ money(ag_total_c) }}</strong></td>
-          <td style="text-align:right"><strong>{% if ag_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
+          <td style="text-align:right"><strong>{{ right_now.bill_count }}</strong></td>
+          <td style="text-align:right"><strong>{{ money(right_now.total_cents) }}</strong></td>
+          <td style="text-align:right"><strong>{% if right_now.total_cents %}100.0%{% else %}0.0%{% endif %}</strong></td>
         </tr>
       </tbody>
     </table>
-  </section>
 
-  <section class="summary-section">
-    <h2>Categories</h2>
-    <p class="note no-print">Open AP grouped by category. Uncategorized pinned to the bottom — a hygiene flag, not a real category.</p>
+    {% if right_now.by_category %}
+    <h3>Right Now AP by category</h3>
     <table class="grid">
       <thead>
-        <tr><th>Category</th><th style="text-align:right">Bill count</th>
-            <th style="text-align:right">Open $</th>
-            <th style="text-align:right">% of total</th></tr>
+        <tr><th>Category</th><th style="text-align:right">Bills</th>
+            <th style="text-align:right">Open $</th><th style="text-align:right">% of section</th></tr>
       </thead>
       <tbody>
-        {% set cat_total_n = categories|sum(attribute='bill_count') %}
-        {% set cat_total_c = categories|sum(attribute='open_cents') %}
-        {% for c in categories %}
+        {% for c in right_now.by_category %}
         <tr>
-          <td><a href="{{ url_for('bills.list_bills', app_category=c.label) }}">{{ c.label }}</a></td>
+          <td><a href="{{ url_for('bills.list_bills', app_category=c.label, obligation_type='ordinary_ap', due_state='due') }}">{{ c.label }}</a></td>
           <td style="text-align:right">{{ c.bill_count }}</td>
           <td style="text-align:right">{{ money(c.open_cents) }}</td>
           <td style="text-align:right">{{ pct(c.pct) }}</td>
         </tr>
         {% endfor %}
-        <tr class="total-row">
-          <td><strong>TOTAL</strong></td>
-          <td style="text-align:right"><strong>{{ cat_total_n }}</strong></td>
-          <td style="text-align:right"><strong>{{ money(cat_total_c) }}</strong></td>
-          <td style="text-align:right"><strong>{% if cat_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
-        </tr>
       </tbody>
     </table>
+    {% endif %}
   </section>
 
+  <!-- ===================== Pipeline / Contingent ===================== -->
   <section class="summary-section">
-    <h2>Top 20 Vendors</h2>
+    <h2>Pipeline / Contingent AP <span class="count">{{ money(pipeline.total_cents) }} · what's coming</span></h2>
+    <p class="note no-print">Cash-forecast view, bucketed by expected payment date. Waiting-on-trigger (ordinary AP, not yet due): <strong>{{ money(pipeline.waiting_cents) }}</strong> ({{ pipeline.waiting_n }}). Not-real AP (deposits / placeholders): <strong>{{ money(pipeline.not_real_cents) }}</strong> ({{ pipeline.not_real_n }}). Not part of the Right Now AP number.</p>
     <table class="grid">
       <thead>
-        <tr><th>Vendor</th><th style="text-align:right">Bill count</th>
-            <th>Oldest bill date</th>
-            <th style="text-align:right">Open $</th>
-            <th style="text-align:right">% of total</th></tr>
+        <tr><th>Coming due (expected pay date)</th><th style="text-align:right">Bills</th>
+            <th style="text-align:right">Open $</th><th style="text-align:right">% of section</th></tr>
       </thead>
       <tbody>
-        {% set v_total_n = top_vendors|sum(attribute='bill_count') %}
-        {% set v_total_c = top_vendors|sum(attribute='open_cents') %}
-        {% for v in top_vendors %}
-        <tr{% if v.other_vendor_count is not none %} class="other-row"{% endif %}>
-          <td>
-            {% if v.vendor_exact %}
-              <a href="{{ url_for('bills.list_bills', vendor=v.vendor_exact) }}">{{ v.label }}</a>
-            {% else %}
-              {{ v.label }}
-            {% endif %}
-          </td>
-          <td style="text-align:right">{{ v.bill_count }}</td>
-          <td>{{ v.oldest_bill_date or '—' }}</td>
-          <td style="text-align:right">{{ money(v.open_cents) }}</td>
-          <td style="text-align:right">{{ pct(v.pct) }}</td>
+        {% for b in pipeline.buckets %}
+        <tr>
+          <td>{{ b.label }}</td>
+          <td style="text-align:right">{{ b.bill_count }}</td>
+          <td style="text-align:right">{{ money(b.open_cents) }}</td>
+          <td style="text-align:right">{{ pct(b.pct) }}</td>
         </tr>
         {% endfor %}
         <tr class="total-row">
           <td><strong>TOTAL</strong></td>
-          <td style="text-align:right"><strong>{{ v_total_n }}</strong></td>
-          <td></td>
-          <td style="text-align:right"><strong>{{ money(v_total_c) }}</strong></td>
-          <td style="text-align:right"><strong>{% if v_total_c %}100.0%{% else %}0.0%{% endif %}</strong></td>
+          <td style="text-align:right"><strong>{{ pipeline.bill_count }}</strong></td>
+          <td style="text-align:right"><strong>{{ money(pipeline.total_cents) }}</strong></td>
+          <td style="text-align:right"><strong>{% if pipeline.total_cents %}100.0%{% else %}0.0%{% endif %}</strong></td>
         </tr>
       </tbody>
     </table>
   </section>
 
-  <p class="note footer-stamp">Snapshot generated {{ today_iso }}. Same data, same totals as the Excel export.</p>
+  <!-- ===================== Debt Service ===================== -->
+  <section class="summary-section">
+    <h2>Debt Service <span class="count">{{ money(debt_service.total_cents) }} · NOT in AP totals</span></h2>
+    <p class="note no-print">Liability paydowns (e.g. the Decathlon note). Booked as a balance-sheet liability, so excluded from AP. Due now: <strong>{{ money(debt_service.due_cents) }}</strong> · upcoming: <strong>{{ money(debt_service.not_due_cents) }}</strong>.</p>
+    <table class="grid">
+      <thead>
+        <tr><th>Vendor</th><th>Invoice due date</th><th>Due state</th>
+            <th style="text-align:right">Open $</th></tr>
+      </thead>
+      <tbody>
+        {% for it in debt_service.installments %}
+        <tr>
+          <td>{{ it.vendor }}</td>
+          <td>{{ it.invoice_due_date or '—' }}</td>
+          <td><span class="badge due due-{{ it.due_state }}">{{ it.due_state|replace('_',' ') }}</span></td>
+          <td style="text-align:right">{{ money(it.open_cents) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">No debt-service bills.</td></tr>
+        {% endfor %}
+        <tr class="total-row">
+          <td><strong>TOTAL</strong></td><td></td><td></td>
+          <td style="text-align:right"><strong>{{ money(debt_service.total_cents) }}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <p class="note footer-stamp">Snapshot generated {{ today_iso }}. Right Now AP is the board-defensible number; debt service and not-real AP are excluded from it by design.</p>
 </div>
 {% endblock %}

@@ -16,6 +16,7 @@
         <a href="{{ url_for('summary.summary') }}">Summary</a>
         {% if current_user.has_role('controller', 'cfo') %}
           <a href="{{ url_for('triage.triage') }}">Triage</a>
+          <a href="{{ url_for('classifications.review') }}">Classifications</a>
         {% endif %}
         {% if current_user.has_role('ap_clerk', 'controller') %}
           <a href="{{ url_for('bills.inbox') }}">Inbox{% if nav_tag_count %}

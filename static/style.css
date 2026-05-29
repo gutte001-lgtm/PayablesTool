@@ -183,6 +183,7 @@ table.payrun select, table.payrun input { padding: 4px 6px; font-size: 13px; }
 }
 .kpi-label { color: var(--muted); font-size: 13px; }
 .kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+.kpi-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .summary-section { margin-top: 18px; }
 .summary-section h2 { margin-bottom: 6px; }
 table.grid tr.total-row td { background: #eef1f4; border-top: 2px solid var(--accent); }

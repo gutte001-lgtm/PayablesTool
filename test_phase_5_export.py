@@ -196,9 +196,13 @@ else:
                   "VALUES (?,?,?,?,?,?,?,0,?)",
                   (bid, "Vendor " + bid, "B-" + bid, amount, amount,
                    "2026-05-01", "2026-05-15", "2026-05-22"))
+        # Phase 4.6 added an export fence (obligation_type IN ordinary_ap/
+        # debt_service AND due_state='due'); these export tests assume the lines
+        # are payable, so seed due_state='due' (obligation_type defaults to
+        # ordinary_ap).
         c.execute("INSERT INTO bill_metadata (qb_bill_id,app_category,approval_state,"
                   "approver_name,approval_channel,approval_date,receipt_delivery_date,"
-                  "ok_for_ceo,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                  "ok_for_ceo,due_state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'due',?,?)",
                   (bid, cat, "Controller_Reviewed", "Marilyn", "Pur Board",
                    "2026-04-28", "2026-05-02", ok_for_ceo, "2026-05-01", "2026-05-01"))
         c.commit(); c.close()
