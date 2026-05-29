@@ -70,6 +70,10 @@
       <td>{{ v.default_category }}</td><td>{{ 'yes' if v.active else 'no' }}</td>
       {% if can_edit %}
       <td>
+        <form method="post" action="{{ url_for('admin.vendor_default_toggle', vendor_id=v.vendor_id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-btn">{{ 'disable' if v.active else 'enable' }}</button>
+        </form>
         <form method="post" action="{{ url_for('admin.vendor_default_delete', vendor_id=v.vendor_id) }}"
               style="display:inline;" onsubmit="return confirm('Remove this vendor default?');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -83,15 +87,30 @@
     {% endfor %}
   </table>
 
+  <p class="note">A vendor default catches bills the GL rules don't categorize
+     — it fires only when no GL rule matches. Matching is by the vendor's stable
+     QB id, not name.</p>
   {% if can_edit %}
   <h3>Add vendor default</h3>
   <form method="post" action="{{ url_for('admin.vendor_default_add') }}" class="inline-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input name="vendor_id" placeholder="vendor id (QB VendorRefId)" required>
-    <input name="vendor_name" placeholder="vendor name (optional)">
-    <input name="default_category" placeholder="default category" required>
+    <select name="vendor_id" required>
+      <option value="" disabled selected>Choose a vendor…</option>
+      {% for v in vendor_picklist %}
+      <option value="{{ v.vendor_ref }}">{{ v.vendor }}</option>
+      {% endfor %}
+    </select>
+    <select name="default_category" required>
+      <option value="" disabled selected>Default category…</option>
+      {% for c in categories %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
     <button type="submit">Add default</button>
   </form>
+  {% if not vendor_picklist %}
+  <p class="note">Every synced vendor already has a default.</p>
+  {% endif %}
   {% endif %}
 
   <h2>Classification reasons (Phase 4.5)</h2>
