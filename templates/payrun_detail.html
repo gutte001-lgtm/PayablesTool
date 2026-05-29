@@ -75,6 +75,12 @@
   {% if is_draft and can_edit %}
   <h2>Add bills <span class="count">({{ candidates|length }} eligible)</span></h2>
   <p class="note">Controller-reviewed, open bills not already on a run. Flags are advisory — selectable anyway.</p>
+  {% if diagnostic and diagnostic.reasons %}
+  <p class="note diag">Of {{ diagnostic.open_total }} open bill{{ '' if diagnostic.open_total == 1 else 's' }},
+    {{ candidates|length }} {{ 'is' if candidates|length == 1 else 'are' }} eligible. Bills not yet eligible because:
+    {% for r in diagnostic.reasons %}<strong>{{ r.count }}</strong> {{ r.label }}{% if not loop.last %}; {% endif %}{% endfor %}.
+    A bill must clear every gate to appear below.</p>
+  {% endif %}
   <form method="post" action="{{ url_for('payruns.add_lines', run_id=run.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <table class="grid">
