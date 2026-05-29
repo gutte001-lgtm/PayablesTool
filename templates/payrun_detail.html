@@ -65,6 +65,9 @@
         <a class="link-btn" href="{{ url_for('exports.export_ceo', run_id=run.id) }}">⬇ CEO Excel</a>
         {% endif %}
       {% endif %}
+      {% if run.status in ['CFO_Approved', 'Locked'] and current_user.has_role('controller', 'cfo') %}
+        <a class="link-btn" href="{{ url_for('exports.export_ceo_workpaper', run_id=run.id) }}">⬇ CEO Workpaper</a>
+      {% endif %}
     </div>
   </div>
   <p class="note">Week ending {{ run.week_ending or '—' }} &middot; created by {{ run.created_by_name or '—' }}

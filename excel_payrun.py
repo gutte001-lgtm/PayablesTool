@@ -258,3 +258,134 @@ def build_cfo_workbook(run, lines, generated_by):
 def build_ceo_workbook(run, lines, generated_by):
     """CEO printout: payable lines filtered to ok_for_ceo=1, landscape print setup."""
     return _build(run, payable_rows(lines, ceo=True), generated_by, ceo=True)
+
+
+# ----------------------------------------------------------------------
+# CEO payment workpaper (three tiers, grouped by app_category)
+# ----------------------------------------------------------------------
+#
+# A separate single-sheet workbook from the CFO/CEO check-run exports above.
+# All three tiers share ONE category grouping (not the method-based
+# group_into_sections, which keys off payment_method that held/not-yet-due bills
+# -- not on a run -- don't have). Amounts: PAID THIS RUN subtotals on
+# amount_to_pay_cents (so the tier total ties to the run's payable total); HELD
+# and NOT YET DUE subtotal on open_balance_cents (what is being held / coming due).
+# Same openpyxl conventions as _build: static values, real Excel dates, the
+# shared _MONEY_FMT / _ACCT_FMT / _DATE_FMT.
+
+WORKPAPER_SHEET = "CEO Workpaper"
+_WP_HEADERS = ["Vendor", "Category", "Bill number", "Date", "Due date", "Amount",
+               "CEO visible", "Note / reason"]
+_WP_AMOUNT_COL = 6
+_WP_DATE_COLS = (4, 5)
+_WP_WIDTHS = {1: 30, 2: 26, 3: 14, 4: 11, 5: 11, 6: 14, 7: 11, 8: 48}
+_UNCATEGORIZED = "Uncategorized"
+
+
+def group_by_category(rows, amount_field):
+    """Group rows by app_category (blank -> 'Uncategorized'), summing
+    `amount_field`. Returns ordered blocks like group_into_sections:
+      {"kind": "section"|"grand_total", "label"/"subtotal_label": <category|TOTAL>,
+       "rows": [...], "subtotal_cents": <int>}
+    Categories sorted alphabetically; rows within by vendor, bill_number."""
+    buckets = {}
+    for r in rows:
+        buckets.setdefault((r.get("app_category") or _UNCATEGORIZED), []).append(r)
+
+    blocks = []
+    for cat in sorted(buckets):
+        cat_rows = sorted(buckets[cat], key=lambda r: ((r.get("vendor") or ""),
+                                                       (r.get("bill_number") or "")))
+        st = sum((r.get(amount_field) or 0) for r in cat_rows)
+        blocks.append({"kind": "section", "label": cat, "subtotal_label": cat,
+                       "rows": cat_rows, "subtotal_cents": st})
+    grand = sum(b["subtotal_cents"] for b in blocks)
+    blocks.append({"kind": "grand_total", "label": None, "subtotal_label": "TOTAL",
+                   "rows": [], "subtotal_cents": grand})
+    return blocks
+
+
+def _wp_row_values(row, amount_field, show_ceo, show_reason):
+    return [
+        row.get("vendor") or "",
+        row.get("app_category") or _UNCATEGORIZED,
+        row.get("bill_number") or "",
+        _xl_date(row.get("bill_date")),
+        _xl_date(row.get("due_date")),
+        (row.get(amount_field) or 0) / 100.0,
+        ("Yes" if row.get("ok_for_ceo") in (1, True) else "No") if show_ceo else "",
+        (row.get("reason") or "") if show_reason else "",
+    ]
+
+
+def build_ceo_workpaper_workbook(run, paid_rows, held_rows, notdue_rows,
+                                 generated_by, processing_count):
+    """Single-sheet CEO workpaper: PAID THIS RUN / HELD BY CHOICE / NOT YET DUE,
+    each grouped by category with subtotals + a tier TOTAL, then the
+    in-processing footnote count. Landscape print setup like the CEO printout."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = WORKPAPER_SHEET
+    header_font = Font(name="Arial", size=10, bold=True)
+    band_font = Font(name="Arial", size=12, bold=True)
+    body_font = Font(name="Arial", size=10)
+    sub_font = Font(name="Arial", size=11, bold=True)
+    foot_font = Font(name="Arial", size=8, italic=True)
+    wrap = Alignment(wrap_text=True, vertical="top")
+
+    for c, h in enumerate(_WP_HEADERS, start=1):
+        ws.cell(1, c, h).font = header_font
+    ws.freeze_panes = "A2"
+    for c, w in _WP_WIDTHS.items():
+        ws.column_dimensions[get_column_letter(c)].width = w
+
+    def _amount(r, cents, font):
+        cell = ws.cell(r, _WP_AMOUNT_COL, cents / 100.0)
+        cell.font = font; cell.number_format = _ACCT_FMT
+
+    # (band label, rows, amount_field, show_ceo_flag, show_reason)
+    tiers = [
+        ("PAID THIS RUN", paid_rows, "amount_to_pay_cents", True, False),
+        ("HELD BY CHOICE", held_rows, "open_balance_cents", False, True),
+        ("NOT YET DUE", notdue_rows, "open_balance_cents", False, False),
+    ]
+
+    r = 2
+    for label, rows, amount_field, show_ceo, show_reason in tiers:
+        ws.cell(r, 1, label).font = band_font
+        r += 1
+        for b in group_by_category(rows, amount_field):
+            if b["kind"] == "section":
+                for row in b["rows"]:
+                    for c, v in enumerate(
+                            _wp_row_values(row, amount_field, show_ceo, show_reason), start=1):
+                        cell = ws.cell(r, c, v); cell.font = body_font
+                        if c == _WP_AMOUNT_COL:
+                            cell.number_format = _MONEY_FMT
+                        elif c in _WP_DATE_COLS and v is not None:
+                            cell.number_format = _DATE_FMT
+                        elif c == 8:
+                            cell.alignment = wrap
+                    r += 1
+                ws.cell(r, 1, b["subtotal_label"]).font = sub_font
+                _amount(r, b["subtotal_cents"], sub_font)
+                r += 1
+            else:  # grand_total
+                ws.cell(r, 1, b["subtotal_label"]).font = sub_font
+                _amount(r, b["subtotal_cents"], sub_font)
+                r += 1
+        r += 1  # blank row between tiers
+
+    ws.cell(r, 1, f"{processing_count} bill(s) still in processing "
+                  f"(New / AP-Reviewed), not shown.").font = foot_font
+    r += 2
+    ws.cell(r, 1, f"CEO Workpaper · PayRun #{run['id']} · {run['name']} · "
+                  f"generated {_now_iso()} by {generated_by}").font = foot_font
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.print_title_rows = "1:1"
+    ws.oddFooter.center.text = "Page &P of &N"
+    return wb

@@ -189,6 +189,91 @@ def picker_diagnostic(conn, run_id):
     return {"open_total": open_total, "reasons": reasons}
 
 
+# Display columns shared by the held / not-yet-due CEO-workpaper tiers (bills not
+# on a run, so no payment_method / amount_to_pay_cents).
+_WORKPAPER_BILL_COLS = (
+    "b.qb_bill_id, b.vendor, b.bill_number, b.bill_date, b.due_date, "
+    "b.amount_cents, b.open_balance_cents, m.app_category, m.ok_for_ceo")
+
+
+def held_and_notdue_tiers(conn, run_id):
+    """CEO-workpaper tiers 2 (HELD BY CHOICE) and 3 (NOT YET DUE) + the
+    processing-backlog footnote count, for `run_id`. Tier 1 (PAID THIS RUN) is
+    assembled by the export route from the existing payable-lines query so its
+    grand total ties to the CFO export by construction.
+
+    Reuses the SAME _fence_gates() predicates as candidate_bills (filtered by
+    gate key -- never a re-inlined copy) so the workpaper can't drift from the
+    pay-run fence. HELD BY CHOICE is exactly:
+
+      Part A -- fully eligible (open balance + every _fence_gates() gate) but
+        parked: not on any included/non-rejected line on ANY run
+        (claimed_bill_ids), and not a rejected line on THIS run (deduped vs B).
+      Part B -- a CFO-rejected line on THIS run (line_state='Rejected'); its
+        cfo_note is the reason.
+
+    NOT YET DUE is the same fence with the `due` gate dropped and due_state
+    pinned to 'not_due' (still Controller_Reviewed real AP -- upcoming pipeline).
+    Returns {"held": [...], "not_yet_due": [...], "processing_count": int}; held
+    rows carry a "reason" (cfo_note for Part B, "" for Part A). Pure read."""
+    gates = _fence_gates()
+
+    def _sql(keys):
+        sel = [g for g in gates if g[0] in keys]
+        return (" AND ".join(g[2] for g in sel),
+                tuple(p for g in sel for p in g[3]))
+
+    # --- Tier 2 Part A: eligible (full fence) but parked ---
+    full_sql, full_params = _sql({"approval", "classification", "due", "obligation"})
+    eligible = conn.execute(
+        f"""SELECT {_WORKPAPER_BILL_COLS}
+            FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
+            WHERE b.open_balance_cents>0 AND {full_sql}
+            ORDER BY b.vendor, b.bill_number""", full_params).fetchall()
+    claimed = claimed_bill_ids(conn)                    # included/non-rejected on ANY run
+    rejected_this_run = {r["qb_bill_id"] for r in conn.execute(
+        "SELECT qb_bill_id FROM pay_run_line "
+        "WHERE pay_run_id=? AND line_state='Rejected'", (run_id,))}
+    held = []
+    for r in eligible:
+        if r["qb_bill_id"] in claimed or r["qb_bill_id"] in rejected_this_run:
+            continue
+        d = dict(r); d["reason"] = ""; d["held_kind"] = "eligible_parked"
+        held.append(d)
+
+    # --- Tier 2 Part B: CFO-rejected lines on THIS run (reason = cfo_note) ---
+    for r in conn.execute(
+            f"""SELECT {_WORKPAPER_BILL_COLS}, pl.cfo_note
+                FROM pay_run_line pl
+                JOIN bill b ON b.qb_bill_id=pl.qb_bill_id
+                LEFT JOIN bill_metadata m ON m.qb_bill_id=pl.qb_bill_id
+                WHERE pl.pay_run_id=? AND pl.line_state='Rejected'
+                ORDER BY b.vendor, b.bill_number""", (run_id,)).fetchall():
+        d = dict(r); d["reason"] = d.pop("cfo_note") or ""
+        d["held_kind"] = "rejected_this_run"
+        held.append(d)
+
+    # --- Tier 3 NOT YET DUE: full fence minus the due gate, pinned not_due ---
+    notdue_sql, notdue_params = _sql({"approval", "classification", "obligation"})
+    not_yet_due = [dict(r) for r in conn.execute(
+        f"""SELECT {_WORKPAPER_BILL_COLS}
+            FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
+            WHERE b.open_balance_cents>0 AND {notdue_sql} AND m.due_state='not_due'
+            ORDER BY b.vendor, b.bill_number""", notdue_params).fetchall()]
+
+    # --- Footnote: real-AP, not-excluded bills still in processing (New/AP) ---
+    proc_sql, proc_params = _sql({"classification", "obligation"})
+    processing_count = conn.execute(
+        f"""SELECT COUNT(*)
+            FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
+            WHERE b.open_balance_cents>0 AND {proc_sql}
+              AND m.approval_state IN ('New','AP_Reviewed')""",
+        proc_params).fetchone()[0]
+
+    return {"held": held, "not_yet_due": not_yet_due,
+            "processing_count": processing_count}
+
+
 def lines_for_run(conn, run_id):
     return conn.execute(
         "SELECT pl.*, b.vendor, b.bill_number, b.bill_date, b.due_date, "
