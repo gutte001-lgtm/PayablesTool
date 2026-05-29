@@ -136,6 +136,76 @@
   </p>
   {% endif %}
 
+  <!-- Phase 4.5: AP dueness classification (obligation_type x due_state) -->
+  <h2>Classification <span class="note">(AP dueness)</span></h2>
+  <p class="note">
+    Obligation:
+    <span class="badge obl obl-{{ meta.obligation_type if meta else 'ordinary_ap' }}">{{ (meta.obligation_type if meta else 'ordinary_ap')|replace('_',' ') }}</span>
+    Due state:
+    <span class="badge due due-{{ meta.due_state if meta else 'not_due' }}">{{ (meta.due_state if meta else 'not_due')|replace('_',' ') }}</span>
+    {% if meta and meta.classification_reason %}<span class="badge">{{ meta.classification_reason|replace('_',' ') }}</span>{% endif %}
+  </p>
+  <table class="grid kv">
+    <tr><td>Invoice due date</td>
+        <td>{{ meta.invoice_due_date if meta and meta.invoice_due_date else '—' }}
+            <span class="note">Contractual — from QB, locked from team edits</span></td></tr>
+    <tr><td>Expected payment date</td>
+        <td>{{ meta.expected_payment_date if meta and meta.expected_payment_date else '—' }}
+            <span class="note">Editable cash-forecast date</span></td></tr>
+  </table>
+  {% if can_classify %}
+  <form method="post" action="{{ url_for('bills.classify', bill_id=bill.qb_bill_id) }}" class="metaform">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fgrid">
+      <label>Obligation type
+        <select name="obligation_type" {{ 'disabled' if not can_edit_obligation }}>
+          {% for o in obligation_types %}<option value="{{ o }}" {{ 'selected' if meta and meta.obligation_type==o }}>{{ o|replace('_',' ') }}</option>{% endfor %}
+        </select>
+        {% if not can_edit_obligation %}<span class="note">controller / CFO only</span>{% endif %}
+      </label>
+      <label>Due state
+        <select name="due_state">
+          {% for d in due_states %}<option value="{{ d }}" {{ 'selected' if meta and meta.due_state==d }}>{{ d|replace('_',' ') }}</option>{% endfor %}
+        </select>
+        <span class="note">set “due” = trigger met</span>
+      </label>
+      <label>Classification reason
+        <select name="classification_reason">
+          <option value="">—</option>
+          {% for r in reasons %}<option value="{{ r }}" {{ 'selected' if meta and meta.classification_reason==r }}>{{ r|replace('_',' ') }}</option>{% endfor %}
+        </select></label>
+      <label>Expected payment date
+        <input type="date" name="expected_payment_date" value="{{ meta.expected_payment_date or '' if meta else '' }}"></label>
+      <label class="wide">Classification note
+        <input name="classification_note" value="{{ meta.classification_note or '' if meta else '' }}" placeholder="optional context"></label>
+    </div>
+    <p class="note">A reason is required when the classification differs from the default (ordinary AP, not due). <code>not_real_ap</code> can never be due. <code>debt_service</code> auto-promotes to due on its invoice due date; ordinary AP never does (a human flips it).</p>
+    <button type="submit">Save classification</button>
+  </form>
+  {% if can_edit_obligation %}
+  <form method="post" action="{{ url_for('admin.classification_reasons_add') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="value" placeholder="+ Add new reason…" maxlength="40">
+    <button type="submit">Add reason</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="note">You have read-only access to this bill's classification.</p>
+  {% endif %}
+
+  {% if class_history %}
+  <h3>Classification change history</h3>
+  <table class="grid">
+    <tr><th>When</th><th>Who</th><th>Field</th><th>From</th><th>To</th></tr>
+    {% for c in class_history %}
+    <tr><td>{{ c.changed_at }}</td><td>{{ c.who or 'system' }}</td>
+        <td>{{ c.field|replace('_',' ') }}</td>
+        <td>{{ c.from_value if c.from_value is not none else '—' }}</td>
+        <td>{{ c.to_value if c.to_value is not none else '—' }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
   <!-- Region 2: editable metadata -->
   <h2>Metadata</h2>
   <p class="note">Category: <strong>{{ meta.app_category or '—' }}</strong>

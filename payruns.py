@@ -83,7 +83,16 @@ def candidate_bills(conn, run_id):
     """Controller_Reviewed + open bills eligible to add to this run: not a
     pay-run-excluded classification, not already claimed by another run, not
     already a line on this run. Each row carries soft-warn flags (contractor,
-    past_sla, open_items, tags) -- nothing is hidden for those, they just warn."""
+    past_sla, open_items, tags) -- nothing is hidden for those, they just warn.
+
+    Phase 4.5 hard fence (the phase's key operational safety guard): a bill is
+    eligible ONLY when due_state='due' AND obligation_type IN
+    ('ordinary_ap','debt_service'). This excludes every not_due bill and every
+    not_real_ap bill (which can never be 'due'). It is enforced HERE, in the
+    candidate SQL, because add_lines() rebuilds eligibility from this set on
+    every submit -- so a forged/forced POST cannot smuggle in an ineligible
+    bill. The fence composes with (does not replace) the existing CEO_EXCLUDED
+    classification fence; both gate independently."""
     today = date.today()
     contractor_ids = followup._contractor_bill_ids(conn)
     past_sla = {r["qb_bill_id"] for r in followup._section_past_sla(conn, today, contractor_ids)}
@@ -94,10 +103,13 @@ def candidate_bills(conn, run_id):
     rows = conn.execute(
         f"""SELECT b.qb_bill_id, b.vendor, b.bill_number, b.bill_date, b.due_date,
                    b.amount_cents, b.open_balance_cents,
-                   m.classification, m.proposed_payment_method
+                   m.classification, m.proposed_payment_method,
+                   m.obligation_type, m.due_state
             FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
             WHERE m.approval_state='Controller_Reviewed' AND b.open_balance_cents>0
               AND (m.classification IS NULL OR m.classification NOT IN ({excl}))
+              AND m.due_state='due'
+              AND m.obligation_type IN ('ordinary_ap','debt_service')
             ORDER BY b.vendor, b.bill_number""",
         tuple(bills.CEO_EXCLUDED)).fetchall()
     ids = [r["qb_bill_id"] for r in rows]

@@ -27,6 +27,7 @@ from exports import init_exports
 from followup import init_followup
 from payruns import init_payruns
 from summary import init_summary
+from triage import init_triage
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -57,6 +58,7 @@ init_followup(app)
 init_payruns(app)
 init_exports(app)
 init_summary(app)
+init_triage(app)
 
 
 @app.context_processor

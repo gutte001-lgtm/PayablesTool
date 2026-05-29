@@ -173,6 +173,31 @@ def pill_exists_ci(conn, value):
 
 
 # ----------------------------------------------------------------------
+# Classification reasons (Phase 4.5) -- extensible dropdown, mirrors the pill
+# lookup. Seeds first, then alphabetical. is_seed distinguishes shipped seeds.
+# ----------------------------------------------------------------------
+
+def classification_reasons(conn):
+    """All reason values, seeds first then alphabetical (dropdown order)."""
+    return [r["value"] for r in conn.execute(
+        "SELECT value FROM classification_reason_lookup ORDER BY is_seed DESC, value")]
+
+
+def reason_exists(conn, value):
+    """Exact-match existence -- validates a reason being SET on a bill."""
+    return conn.execute(
+        "SELECT 1 FROM classification_reason_lookup WHERE value=?",
+        (value,)).fetchone() is not None
+
+
+def reason_exists_ci(conn, value):
+    """Case-insensitive existence -- rejects duplicate ADDs."""
+    return conn.execute(
+        "SELECT 1 FROM classification_reason_lookup WHERE LOWER(value)=LOWER(?)",
+        (value,)).fetchone() is not None
+
+
+# ----------------------------------------------------------------------
 # Last activity (per bill)
 # ----------------------------------------------------------------------
 
