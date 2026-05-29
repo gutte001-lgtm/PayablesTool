@@ -138,10 +138,26 @@ def rules():
     uncat = db.q1("SELECT COUNT(*) AS n FROM bill_metadata WHERE app_category='Uncategorized'")
     reasons = db.qa("SELECT value, is_seed FROM classification_reason_lookup "
                     "ORDER BY is_seed DESC, value")
+    # Vendor picker: distinct vendors seen on synced bills that don't already have
+    # a default, labelled by their most-recent bill name (a few vendor_refs have
+    # been renamed in QB; the latest name is the least-confusing label). The form
+    # submits the stable vendor_ref, so the controller never types an opaque id.
+    vendor_picklist = db.qa(
+        "SELECT b.vendor_ref, b.vendor FROM bill b "
+        "JOIN (SELECT vendor_ref, MAX(qb_updated_at) AS mu FROM bill "
+        "      GROUP BY vendor_ref) x "
+        "  ON x.vendor_ref = b.vendor_ref AND x.mu = b.qb_updated_at "
+        "WHERE b.vendor_ref NOT IN (SELECT vendor_id FROM vendor_category_default) "
+        "GROUP BY b.vendor_ref ORDER BY b.vendor")
+    # Shared category vocabulary (same as the GL rules) so defaults and rules stay
+    # in one taxonomy rather than free-text drift.
+    categories = [r["target_category"] for r in db.qa(
+        "SELECT DISTINCT target_category FROM gl_rule ORDER BY target_category")]
     return render_template("admin_rules.html",
                            gl_rules=gl_rules, vendor_defaults=vendor_defaults,
                            coverage=coverage, uncat=uncat,
                            classification_reasons=reasons,
+                           vendor_picklist=vendor_picklist, categories=categories,
                            can_edit=current_user.has_role("controller"))
 
 
@@ -217,6 +233,12 @@ def vendor_default_add():
     if not vid or not cat:
         flash("Vendor default needs a vendor id and a category.", "error")
         return redirect(url_for("admin.rules"))
+    # The picker submits only the stable vendor_ref; resolve a display name from
+    # the vendor's most-recent bill when the form didn't carry one.
+    if not vname:
+        row = db.q1("SELECT vendor FROM bill WHERE vendor_ref=? "
+                    "ORDER BY qb_updated_at DESC LIMIT 1", (vid,))
+        vname = row["vendor"] if row and row["vendor"] else None
     db.execute(
         "INSERT INTO vendor_category_default (vendor_id, vendor_name, "
         "default_category, active, created_by, created_at, updated_at) "
@@ -242,6 +264,27 @@ def vendor_default_delete(vendor_id):
     db.get_db().commit()
     sync.recompute_all()
     flash("Vendor default removed and bills recomputed.", "ok")
+    return redirect(url_for("admin.rules"))
+
+
+@bp.route("/vendor-defaults/<vendor_id>/toggle", methods=["POST"])
+@role_required("controller")
+def vendor_default_toggle(vendor_id):
+    """Flip a vendor default active/inactive (parity with rules_toggle). An
+    inactive default is ignored by _load_vendor_defaults, so toggling off reverts
+    its bills to whatever the GL rules say (Uncategorized if nothing matches).
+    Audited + recomputes across all bills."""
+    row = db.q1("SELECT active FROM vendor_category_default WHERE vendor_id=?", (vendor_id,))
+    if not row:
+        abort(404)
+    new_active = 0 if row["active"] else 1
+    db.execute("UPDATE vendor_category_default SET active=?, updated_at=? WHERE vendor_id=?",
+               (new_active, sync._now_iso(), vendor_id))
+    sync.log_audit(db.get_db(), current_user.id, "vendor_default", vendor_id,
+                   "vendor_default_toggle", {"active": row["active"]}, {"active": new_active})
+    db.get_db().commit()
+    sync.recompute_all()
+    flash("Vendor default toggled and bills recomputed.", "ok")
     return redirect(url_for("admin.rules"))
 
 
