@@ -116,10 +116,18 @@ def _now_iso():
 # A bill is debt service when ANY of its lines reduces a known liability
 # account. Decathlon's note -- GL 26110, "NOTES PAYABLE:Decathlon Alpha IV,
 # L.P." -- is the one confirmed liability account in the warehouse (the sole
-# NOTES PAYABLE account, and Decathlon-exclusive). Detection runs ONLY on first
-# sight (the metadata-create branch), so a human override of obligation_type is
-# never re-derived by a later sync. EDIT POINT: add other liability GL account
-# numbers here as loans/financed obligations are identified during triage.
+# NOTES PAYABLE account, and Decathlon-exclusive).
+#
+# *** EDIT POINT (single source of truth) ***  Add other liability GL account
+# numbers (canonical numbers from dim_account, as strings) here as loans /
+# financed obligations are confirmed. Detection reads this set as-is on every
+# sync; nothing else needs to change. Left 26110-only pending Joe's confirmed
+# full list (Phase 4.6 item 7).
+#
+# Detection runs on BOTH the create path (first sight) AND the update path
+# (Phase 4.6) -- a bill that only starts hitting a liability account later is
+# still caught. The update path is hard-guarded by `classified_by IS NULL`, so
+# a human's deliberate obligation_type is NEVER re-derived/overwritten by sync.
 # Matched on the canonical account number (reliable for liability lines, which
 # -- unlike many COGS lines -- carry a parsed number too) with a fallback to the
 # leading-digit parse.
@@ -135,7 +143,8 @@ def is_liability_account_line(line):
 
 def bill_reduces_liability(lines):
     """True if ANY line on the bill reduces a known liability account
-    (-> default obligation_type='debt_service' on first sight)."""
+    (-> auto-classify obligation_type='debt_service' on create and, when
+    classified_by IS NULL, on update too)."""
     return any(is_liability_account_line(ln) for ln in lines)
 
 
@@ -553,10 +562,16 @@ def _ensure_metadata(conn, bill_id, ops_primary, ops_all, has_credit, now,
       - Later syncs: invoice_due_date is updated ONLY here (from QB), never from
         a team edit; any change is written to classification_audit.
 
+    Phase 4.6:
+      - Later syncs ALSO run liability-account detection (a bill that only starts
+        hitting a liability account after first sight is still caught). Hard
+        guard: only auto-set debt_service when classified_by IS NULL -- a sync
+        must NEVER stomp a human's deliberate classification.
+
     Returns (created, debt_service_detected, invoice_due_date_changed)."""
     exists = conn.execute(
-        "SELECT invoice_due_date FROM bill_metadata WHERE qb_bill_id = ?",
-        (bill_id,)).fetchone()
+        "SELECT invoice_due_date, obligation_type, classified_by "
+        "FROM bill_metadata WHERE qb_bill_id = ?", (bill_id,)).fetchone()
     if exists:
         conn.execute(
             "UPDATE bill_metadata SET ops_number=?, ops_numbers_all=?, "
@@ -575,7 +590,22 @@ def _ensure_metadata(conn, bill_id, ops_primary, ops_all, has_credit, now,
             log_classification_change(conn, bill_id, "invoice_due_date",
                                       old_idd, invoice_due_date, None, now)
             idd_changed = True
-        return False, False, idd_changed
+        # Phase 4.6: update-path debt-service detection. Only when the bill now
+        # reduces a liability account, is NOT already debt_service, and has NOT
+        # been classified by a human (classified_by IS NULL). The classified_by
+        # guard is non-negotiable: sync never overwrites accounting judgment.
+        detected_now = False
+        if (is_debt_service and exists["classified_by"] is None
+                and exists["obligation_type"] != "debt_service"):
+            conn.execute(
+                "UPDATE bill_metadata SET obligation_type='debt_service', "
+                "classification_reason='debt_service', classified_at=?, "
+                "updated_at=? WHERE qb_bill_id=?", (now, now, bill_id))
+            log_classification_change(conn, bill_id, "obligation_type",
+                                      exists["obligation_type"], "debt_service",
+                                      None, now)
+            detected_now = True
+        return False, detected_now, idd_changed
 
     if is_debt_service:
         conn.execute(

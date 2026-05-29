@@ -177,49 +177,11 @@ check("hdr: uncategorized_count = 1 (the NULL cat row)",
       hdr3["uncategorized_count"] == 1)
 check("hdr: total_open_cents sums all", hdr3["total_open_cents"] == 11849_00)
 
-# ---- workbook: 4 sheets, totals match ----
-data = {
-    "header": hdr, "aging": ag2, "categories": cat2, "top_vendors": tv2,
-    "today_iso": TODAY.isoformat(),
-}
-wb = summary.build_summary_workbook(data)
-bio = io.BytesIO(); wb.save(bio); bio.seek(0)
-rwb = openpyxl.load_workbook(bio)
-check("wb: 4 sheets in order: Summary, Aging, Categories, Top Vendors",
-      rwb.sheetnames == ["Summary", "Aging", "Categories", "Top Vendors"])
-
-# Aging sheet TOTAL row in col C (Open $) = grand total in dollars
-ag_ws = rwb["Aging"]
-tot_rows = [r for r in range(2, ag_ws.max_row + 1) if ag_ws.cell(r, 1).value == "TOTAL"]
-check("wb: Aging has exactly one TOTAL row", len(tot_rows) == 1)
-check("wb: Aging TOTAL Open $ = $2800.00 (grand)",
-      ag_ws.cell(tot_rows[0], 3).value == 2800.0)
-check("wb: Aging Open $ col is numeric with money format",
-      isinstance(ag_ws.cell(2, 3).value, (int, float))
-      and ag_ws.cell(2, 3).number_format == "#,##0.00")
-
-cat_ws = rwb["Categories"]
-cat_total_rows = [r for r in range(2, cat_ws.max_row + 1) if cat_ws.cell(r, 1).value == "TOTAL"]
-check("wb: Categories TOTAL = $2800.00",
-      len(cat_total_rows) == 1 and cat_ws.cell(cat_total_rows[0], 3).value == 2800.0)
-
-tv_ws = rwb["Top Vendors"]
-tv_total_rows = [r for r in range(2, tv_ws.max_row + 1) if tv_ws.cell(r, 1).value == "TOTAL"]
-check("wb: Top Vendors TOTAL Open $ = $2800.00",
-      len(tv_total_rows) == 1 and tv_ws.cell(tv_total_rows[0], 4).value == 2800.0)
-
-# Summary sheet header values
-s_ws = rwb["Summary"]
-check("wb: Summary Total Open AP cell = $2800.00",
-      s_ws.cell(5, 2).value == 2800.0)
-check("wb: Summary 'As of' line carries the last-sync ISO",
-      "2026-05-26" in (s_ws.cell(2, 1).value or ""))
-
-# All sheets set up for landscape print
-for sheet in rwb.sheetnames:
-    ws = rwb[sheet]
-    check(f"wb: {sheet} sheet is landscape",
-          ws.page_setup.orientation == "landscape")
+# NOTE: the build_summary_workbook structure changed in Phase 4.6 (the dashboard
+# was restructured into the three classification sections). The workbook shape
+# (Overview / Right Now AP / RNAP by Category / Pipeline / Debt Service) is now
+# covered by test_phase_4_6.py. The generic pivot functions tested above
+# (aging/category/vendor/header) are unchanged and still in use.
 
 # ====================================================================
 print("\n" + "=" * 60); print("PART B -- routes (temp DB + client)"); print("=" * 60)
@@ -253,10 +215,12 @@ else:
     def login(u):
         c = app.test_client(); c.post("/login", data={"username": u, "password": "testpw"}); return c
 
-    def seed_bill(bid, vendor, open_cents, cat=None, due_offset=0, paid=False):
+    def seed_bill(bid, vendor, open_cents, cat=None, due_offset=0, paid=False,
+                  obligation="ordinary_ap", due_state="due"):
         """When paid=True: is_paid=1 and open_balance_cents=0 (the warehouse
         sets balance to 0 when QB marks a bill paid; sync flips is_paid).
-        amount_cents stays at the original bill amount."""
+        amount_cents stays at the original bill amount. obligation/due_state
+        (Phase 4.6) default to ordinary_ap+due so a seeded bill is Right Now AP."""
         c = _cn()
         due = (TODAY + timedelta(days=due_offset)).isoformat() if due_offset is not None else None
         c.execute("INSERT INTO bill (qb_bill_id,vendor,bill_number,amount_cents,"
@@ -267,9 +231,15 @@ else:
                    "2026-04-01", due,
                    1 if paid else 0,
                    "2026-05-22"))
+        # Phase 4.6: seed the 2-D classification so the bill lands in a section.
+        # Default ordinary_ap + due (Right Now AP), with invoice/expected dates
+        # mirroring due_date so the Right Now AP aging (by invoice_due_date)
+        # buckets it the same way Phase 6 expected.
         c.execute("INSERT INTO bill_metadata (qb_bill_id,app_category,approval_state,"
-                  "created_at,updated_at) VALUES (?,?,?,?,?)",
-                  (bid, cat, "New", "2026-05-01", "2026-05-01"))
+                  "obligation_type,due_state,invoice_due_date,expected_payment_date,"
+                  "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (bid, cat, "New", obligation, due_state, due, due,
+                   "2026-05-01", "2026-05-01"))
         c.commit(); c.close()
 
     XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -285,25 +255,23 @@ else:
     r = c.get("/summary")
     check("route: /summary 200 for controller", r.status_code == 200)
     body = r.data.decode("utf-8")
-    check("route: /summary shows Total Open AP",
-          "Total Open AP" in body and "$15,000.00" in body)
-    check("route: /summary shows Uncategorized count linking to ?uncat=1",
-          "uncat=1" in body and "Uncategorized" in body)
-    check("route: /summary shows section headings",
-          "Aging" in body and "Categories" in body and "Top 20 Vendors" in body)
-    check("route: /summary shows the No due date aging row",
+    # Phase 4.6: the three classification sections (all 3 open bills default to
+    # ordinary_ap+due -> Right Now AP = $15,000).
+    check("route: /summary shows the three section headings",
+          "Right Now AP" in body and "Pipeline" in body and "Debt Service" in body)
+    check("route: /summary Right Now AP total = $15,000",
+          "$15,000.00" in body)
+    check("route: /summary shows the No due date aging row (s3 has no invoice date)",
           "No due date" in body)
     check("route: /summary shows a TOTAL row in each section table",
           body.count("TOTAL") >= 3)
-    # paid-bill exclusion: PaidCo's $99,999 must not appear anywhere, header
-    # bill_count must be 3 (the three open bills), not 4.
+    # paid-bill exclusion: PaidCo's $99,999 must not appear anywhere.
     check("route: /summary excludes paid bill -- 'PaidCo Inc' absent from page",
           "PaidCo Inc" not in body)
     check("route: /summary excludes paid bill from totals -- no '99,999' in body",
           "99,999" not in body)
-    m = re.search(r'Open bills</div>\s*<div class="kpi-value">(\d+)</div>', body)
-    check("route: header 'Open bills' count = 3 (paid bill excluded)",
-          m is not None and m.group(1) == "3")
+    check("route: Right Now AP shows the 3-bill count",
+          "3 bills" in body)
     check("route: cfo can see /summary",
           login("shaun").get("/summary").status_code == 200)
     check("route: ap_clerk can see /summary",
@@ -314,7 +282,7 @@ else:
     check("route: anonymous -> 302 redirect to login",
           ra.status_code == 302 and "/login" in (ra.headers.get("Location") or ""))
 
-    # ---- export route returns valid 4-sheet xlsx with correct filename ----
+    # ---- export route returns the valid 5-sheet xlsx with correct filename ----
     re = c.get("/summary/export.xlsx")
     check("route: export 200 + xlsx mimetype",
           re.status_code == 200 and re.headers.get("Content-Type", "").startswith(XLSX))
@@ -322,13 +290,14 @@ else:
     check("route: filename is MRP_AP_Summary_YYYY-MM-DD.xlsx",
           "MRP_AP_Summary_" in cd and cd.endswith(".xlsx") and date.today().isoformat() in cd)
     dwb = openpyxl.load_workbook(io.BytesIO(re.data))
-    check("route: downloaded workbook has 4 sheets",
-          dwb.sheetnames == ["Summary", "Aging", "Categories", "Top Vendors"])
-    # Aging TOTAL on the downloaded workbook equals $15,000
-    ag_ws = dwb["Aging"]
-    tot = [ag_ws.cell(r, 3).value for r in range(2, ag_ws.max_row + 1)
-           if ag_ws.cell(r, 1).value == "TOTAL"]
-    check("route: downloaded Aging TOTAL Open $ = 15000.00", tot == [15000.0])
+    check("route: downloaded workbook has the 5 Phase 4.6 sheets",
+          dwb.sheetnames == ["Overview", "Right Now AP", "RNAP by Category",
+                             "Pipeline", "Debt Service"])
+    # Right Now AP sheet aging TOTAL = $15,000 (all 3 open bills are ordinary+due)
+    rn_ws = dwb["Right Now AP"]
+    tot = [rn_ws.cell(r, 3).value for r in range(2, rn_ws.max_row + 1)
+           if rn_ws.cell(r, 1).value == "TOTAL"]
+    check("route: downloaded Right Now AP TOTAL Open $ = 15000.00", tot == [15000.0])
 
     # ---- bills.py ?vendor= exact filter (the small cross-file change) ----
     # seed a second bill with same vendor and one with a different vendor

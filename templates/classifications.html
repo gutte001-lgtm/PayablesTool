@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Classifications review &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="detail-head">
+    <h1>Classifications review</h1>
+    <div class="actions">
+      <form method="post" action="{{ url_for('classifications.mark_reviewed') }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Mark reviewed</button>
+      </form>
+    </div>
+  </div>
+  <p class="note">Read-only review surface. Classification edits happen on each bill's detail page.</p>
+
+  <!-- Changes since last visit -->
+  <h2>Changes since your last visit
+    <span class="count">{% if since %}since {{ since }}{% else %}all history{% endif %} &middot; {{ changes|length }}</span></h2>
+  <table class="grid">
+    <tr><th>When</th><th>Who</th><th>Vendor</th><th>Field</th><th>From</th><th>To</th></tr>
+    {% for c in changes %}
+    <tr>
+      <td>{{ c.changed_at }}</td>
+      <td>{{ c.who or 'system' }}</td>
+      <td><a href="{{ url_for('bills.detail', bill_id=c.bill_id) }}">{{ c.vendor or c.bill_id }}</a></td>
+      <td>{{ c.field|replace('_',' ') }}</td>
+      <td>{{ c.from_value if c.from_value is not none else '—' }}</td>
+      <td>{{ c.to_value if c.to_value is not none else '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6">No classification changes since your last visit.</td></tr>
+    {% endfor %}
+  </table>
+
+  <!-- Open not-real-AP -->
+  <h2>Open not-real-AP <span class="count">{{ not_real|length }} — defend to CEO</span></h2>
+  <p class="note no-print">Bills flagged not-real (deposits, placeholders). These are excluded from AP and from pay runs; the reason is what the CFO defends to the CEO.</p>
+  <table class="grid">
+    <tr><th>Vendor</th><th>Bill #</th><th style="text-align:right">Open $</th>
+        <th>Reason</th><th>Note</th><th>Classified by</th></tr>
+    {% for r in not_real %}
+    <tr>
+      <td><a href="{{ url_for('bills.detail', bill_id=r.qb_bill_id) }}">{{ r.vendor or '—' }}</a></td>
+      <td>{{ r.bill_number or '—' }}</td>
+      <td style="text-align:right">{{ money(r.open_balance_cents) }}</td>
+      <td>{% if r.classification_reason %}<span class="badge">{{ r.classification_reason|replace('_',' ') }}</span>{% else %}—{% endif %}</td>
+      <td class="memo">{{ r.classification_note or '—' }}</td>
+      <td>{{ r.classified_by_name or 'system' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6">No open not-real-AP bills.</td></tr>
+    {% endfor %}
+  </table>
+
+  <!-- Pending trigger flips -->
+  <h2>Pending trigger flips <span class="count">{{ flips|length }} — stale triggers</span></h2>
+  <p class="note no-print">Ordinary-AP bills still marked not-due whose expected payment date has already passed. Either the trigger was met (flip to due) or the forecast date needs updating.</p>
+  <table class="grid">
+    <tr><th>Vendor</th><th>Bill #</th><th>Expected pay date</th>
+        <th style="text-align:right">Business days past</th><th style="text-align:right">Open $</th></tr>
+    {% for r in flips %}
+    <tr class="{{ 'row-stale' if r.days_past >= 10 else ('row-warn' if r.days_past >= 5 else '') }}">
+      <td><a href="{{ url_for('bills.detail', bill_id=r.qb_bill_id) }}">{{ r.vendor or '—' }}</a></td>
+      <td>{{ r.bill_number or '—' }}</td>
+      <td>{{ r.expected_payment_date }}</td>
+      <td style="text-align:right">{{ r.days_past }}</td>
+      <td style="text-align:right">{{ money(r.open_balance_cents) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5">No stale trigger flips.</td></tr>
+    {% endfor %}
+  </table>
+
+  <!-- Searchable flat list -->
+  <h2>All classifications <span class="count">open AP</span></h2>
+  <form method="get" action="{{ url_for('classifications.review') }}" class="filters no-print">
+    <input name="q" value="{{ q or '' }}" placeholder="search vendor / bill # / reason">
+    <button type="submit">Search</button>
+    <a href="{{ url_for('classifications.review') }}" class="clear">clear</a>
+  </form>
+  <table class="grid">
+    <tr><th>Vendor</th><th>Bill #</th><th>Obligation</th><th>Due state</th>
+        <th>Reason</th><th>Note</th><th>Classified by</th><th style="text-align:right">Open $</th></tr>
+    {% for r in flat %}
+    <tr>
+      <td><a href="{{ url_for('bills.detail', bill_id=r.qb_bill_id) }}">{{ r.vendor or '—' }}</a></td>
+      <td>{{ r.bill_number or '—' }}</td>
+      <td><span class="badge obl obl-{{ r.obligation_type }}">{{ r.obligation_type|replace('_',' ') }}</span></td>
+      <td><span class="badge due due-{{ r.due_state }}">{{ r.due_state|replace('_',' ') }}</span></td>
+      <td>{{ r.classification_reason|replace('_',' ') if r.classification_reason else '—' }}</td>
+      <td class="memo">{{ r.classification_note or '—' }}</td>
+      <td>{{ r.classified_by_name or '—' }}</td>
+      <td style="text-align:right">{{ money(r.open_balance_cents) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8">No matching bills.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

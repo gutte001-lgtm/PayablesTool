@@ -7,16 +7,21 @@ The controller accepts the suggestion or overrides it in one submit; the bill is
 stamped classified_by/at so it leaves the queue, and every change is recorded in
 classification_audit. Controller + CFO only -- they own obligation_type.
 
-Heuristics (Joe's spec):
+Heuristics (Joe's spec, deposit rule tightened in 4.6):
   1. line reduces a known liability account  -> debt_service, reason=debt_service
-  2. New/Pre-owned Device Purchases category AND a payment/credit already applied
-     (the deposit pattern)                   -> not_real_ap,  reason=deposit
+  2. New/Pre-owned Device Purchases category AND a linked vendor credit
+     (the deterministic deposit signal)      -> not_real_ap,  reason=deposit
   3. Notes Payable category                  -> debt_service, reason=debt_service
   4. otherwise                               -> ordinary_ap,  not_due (no reason)
 
-"Payment already applied in QB" is inferred locally as open_balance < amount
-(a partial payment left a residual) OR a linked vendor credit -- PayablesTool
-does not mirror BillPayment rows, so this is the closest deterministic signal.
+Deposit signal (4.6): we gate the not_real_ap/deposit suggestion on a linked
+vendor credit (has_credit_applied) -- NOT on "open_balance < amount" alone. A
+partially-PAID COGS bill with product received is ordinary AP, not a deposit
+(the old open<amount rule misfired on a real Candela COGS bill). When a device-
+purchase bill is partially paid with no vendor credit, we make the suggestion
+WEAKER -- suggest ordinary_ap and flag "possible deposit? verify" rather than
+being confidently wrong. PayablesTool does not mirror BillPayment rows, so a
+vendor credit is the closest trustworthy deterministic deposit signal.
 """
 
 from flask import (Blueprint, abort, flash, redirect, render_template,
@@ -56,12 +61,21 @@ def suggest(bill_row, lines, meta):
                 "a line reduces a known liability account (debt service)")
     cat = (meta["app_category"] or "")
     if cat in ("New Device Purchases", "Pre-owned Device Purchases"):
+        # Trust a linked vendor credit as the deposit signal; do NOT treat mere
+        # partial payment as a deposit (a partially-paid COGS bill with product
+        # received is ordinary AP -- this misfired on a real Candela bill).
+        if meta["has_credit_applied"]:
+            return ("not_real_ap", "not_due", "deposit",
+                    "device-purchase bill with a vendor credit applied "
+                    "(deposit pattern)")
         amt = bill_row["amount_cents"] or 0
         opn = bill_row["open_balance_cents"] or 0
-        if amt > opn or meta["has_credit_applied"]:
-            return ("not_real_ap", "not_due", "deposit",
-                    "device-purchase bill with a payment/credit already applied "
-                    "(deposit pattern)")
+        if 0 < opn < amt:
+            # partially paid, no vendor credit -> ambiguous. Weaker suggestion:
+            # ordinary_ap, but flag for a human to confirm it isn't a deposit.
+            return ("ordinary_ap", "not_due", None,
+                    "ordinary AP — partially paid with no vendor credit; "
+                    "possible deposit? verify before classifying")
     if "notes payable" in cat.lower():
         return ("debt_service", "not_due", "debt_service",
                 "Notes Payable category (likely a loan)")
