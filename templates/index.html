@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Home &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
 
 <!-- Phase 3.6: Open Items -- explicit "this bill needs work", shared across the team -->

@@ -61,6 +61,17 @@ init_summary(app)
 init_triage(app)
 
 
+def _money(cents):
+    """Render integer cents as grouped USD: 31475000 -> '$314,750.00'.
+    Registered as the Jinja global `money` and used by every template, so the
+    display format is single-sourced and can't drift per page. cents->dollars
+    conversion is unchanged; this only adds thousands separators."""
+    return "${:,.2f}".format((cents or 0) / 100)
+
+
+app.jinja_env.globals["money"] = _money
+
+
 @app.context_processor
 def inject_nav_badges():
     """Nav badges, recomputed every request (no caching): Phase 3.5 active-tag

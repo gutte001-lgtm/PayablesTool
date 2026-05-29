@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Follow-up &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 
 {% macro commonhdr() %}
   <th>Vendor</th><th>Bill #</th><th style="text-align:right">Amount</th>

@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ bill.vendor or bill.qb_bill_id }} &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
 <div class="card">
   <p class="note"><a href="{{ url_for('bills.list_bills') }}">&laquo; Bills</a>

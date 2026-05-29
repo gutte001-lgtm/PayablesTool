@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ title or 'Bills' }} &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% macro sortlink(col, label) %}
   {% set ndir = 'desc' if (sort==col and dir=='asc') else 'asc' %}
   <a href="{{ url_for(endpoint, sort=col, dir=ndir, **fparams) }}">{{ label }}{% if sort==col %} {{ '▲' if dir=='asc' else '▼' }}{% endif %}</a>

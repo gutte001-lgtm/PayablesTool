@@ -37,6 +37,13 @@ _UNTRIAGED = ("m.obligation_type='ordinary_ap' AND m.due_state='not_due' "
               "AND m.classification_reason IS NULL AND m.classified_by IS NULL "
               "AND m.classified_at IS NULL")
 
+# Triage is scoped to OPEN AP only -- the canonical open-bill definition shared
+# with summary.py / bills.py. Paid/closed bills (open_balance=0) are out of
+# pay-runs and out of the AP report, so triaging them is busywork; they can
+# still be classified from the bill-detail page if ever needed. This is also why
+# the queue count is the open-untriaged set, not the whole table.
+_OPEN_AP = "b.open_balance_cents > 0 AND b.is_paid = 0"
+
 
 def init_triage(app):
     app.register_blueprint(bp)
@@ -62,19 +69,20 @@ def suggest(bill_row, lines, meta):
 
 
 def _remaining(conn):
+    """Count of DISTINCT open, untriaged bills (one per bill -- the join to
+    bill_metadata is 1:1 on qb_bill_id, so no fan-out; never joins bill_line)."""
     return conn.execute(
         "SELECT COUNT(*) FROM bill b JOIN bill_metadata m "
-        f"ON m.qb_bill_id=b.qb_bill_id WHERE {_UNTRIAGED}").fetchone()[0]
+        f"ON m.qb_bill_id=b.qb_bill_id WHERE {_UNTRIAGED} AND {_OPEN_AP}").fetchone()[0]
 
 
 def _next_bill(conn):
-    """The next untriaged bill: biggest open balance first (most impactful),
-    then a stable id tiebreak. Open bills before paid ones."""
+    """The next untriaged open bill: biggest open balance first (most
+    impactful), then a stable id tiebreak."""
     return conn.execute(
         "SELECT b.* FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id "
-        f"WHERE {_UNTRIAGED} "
-        "ORDER BY (b.open_balance_cents>0) DESC, b.open_balance_cents DESC, "
-        "b.qb_bill_id LIMIT 1").fetchone()
+        f"WHERE {_UNTRIAGED} AND {_OPEN_AP} "
+        "ORDER BY b.open_balance_cents DESC, b.qb_bill_id LIMIT 1").fetchone()
 
 
 @bp.route("/triage")

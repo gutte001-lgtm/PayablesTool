@@ -43,6 +43,7 @@ import init_db     # noqa: E402
 import sync        # noqa: E402
 import tags        # noqa: E402
 import payruns     # noqa: E402
+import triage      # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "mig006", ROOT / "migrations" / "006_phase_4_5.py")
@@ -307,6 +308,43 @@ cn.close()
 
 
 # ======================================================================
+print("=" * 60); print("test_triage_count_no_fanout_and_open_only"); print("=" * 60)
+p, cn = fresh_sqlite()
+# N=3 OPEN untriaged bills; one of them carries SEVERAL GL lines. A fan-out
+# (joining bill_line) would count lines, not bills -> the assert below catches it.
+for bid in ("Q1", "Q2", "Q3"):
+    add_bill(cn, bid, open_bal=10000); add_meta(cn, bid, "ordinary_ap", "not_due")
+add_line(cn, "Q1", 1, "56100 SHIPPING"); add_line(cn, "Q1", 2, "53100 SVC")
+add_line(cn, "Q1", 3, "72510 LEGAL")
+add_line(cn, "Q2", 1, "56100 SHIPPING"); add_line(cn, "Q3", 1, "56100 SHIPPING")
+# a PAID untriaged bill must be EXCLUDED from the open-only queue
+add_bill(cn, "QPAID", amount=10000, open_bal=0); add_meta(cn, "QPAID", "ordinary_ap", "not_due")
+# a triaged open bill must also be excluded (classified_by set)
+add_bill(cn, "QDONE", open_bal=10000)
+cn.execute("INSERT INTO bill_metadata (qb_bill_id,approval_state,obligation_type,"
+           "due_state,classified_by,classified_at,created_at,updated_at) "
+           "VALUES ('QDONE','Controller_Reviewed','ordinary_ap','not_due',1,'t','t','t')")
+cn.commit()
+check("triage: _remaining counts bills not lines (no fan-out) == 3",
+      triage._remaining(cn) == 3)
+check("triage: bill JOIN bill_line would have fanned out (proof the bug would show)",
+      cn.execute("SELECT COUNT(*) FROM bill b JOIN bill_line l ON l.qb_bill_id=b.qb_bill_id "
+                 "WHERE b.qb_bill_id IN ('Q1','Q2','Q3')").fetchone()[0] == 5)
+check("triage: paid bill excluded from open-only queue",
+      cn.execute("SELECT COUNT(*) FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id "
+                 f"WHERE {triage._UNTRIAGED} AND {triage._OPEN_AP} "
+                 "AND b.qb_bill_id='QPAID'").fetchone()[0] == 0)
+check("triage: triaged bill excluded (classified_by set)",
+      "QDONE" not in {r["qb_bill_id"] for r in cn.execute(
+          "SELECT b.qb_bill_id FROM bill b JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id "
+          f"WHERE {triage._UNTRIAGED} AND {triage._OPEN_AP}")})
+nb = triage._next_bill(cn)
+check("triage: _next_bill returns an open untriaged bill (not paid/triaged)",
+      nb is not None and nb["qb_bill_id"] in ("Q1", "Q2", "Q3"))
+cn.close()
+
+
+# ======================================================================
 # ROUTE TESTS (Flask test client)
 # ======================================================================
 if not dotenv_values(ROOT / ".env").get("SECRET_KEY"):
@@ -330,9 +368,16 @@ else:
         init_db.seed_classification_reasons(cn)
         cn.close()
 
-    from app import app  # noqa: E402
+    from app import app, _money  # noqa: E402
     app.config["WTF_CSRF_ENABLED"] = False
     app.config["TESTING"] = True
+
+    print("=" * 60); print("test_money_grouping"); print("=" * 60)
+    check("money: groups thousands ($314,750.00)", _money(31475000) == "$314,750.00")
+    check("money: millions ($2,025,000.00)", _money(202500000) == "$2,025,000.00")
+    check("money: None -> $0.00", _money(None) == "$0.00")
+    check("money: small value ($12.71)", _money(1271) == "$12.71")
+    check("money: registered as a Jinja global", app.jinja_env.globals.get("money") is _money)
 
     def client(username):
         c = app.test_client()

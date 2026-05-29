@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Triage &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
 <div class="card">
   <h1>Triage <span class="note">(AP dueness — pre-go-live)</span></h1>
@@ -9,7 +8,8 @@
   <p class="ok-big">✓ Nothing left to triage — every bill has a classification decision.</p>
   <p class="note"><a href="{{ url_for('bills.list_bills') }}">Back to bills</a></p>
   {% else %}
-  <p class="note">{{ remaining }} bill(s) left to triage. Biggest open balance first.</p>
+  <p class="note">{{ remaining }} open bill(s) left to triage. Biggest open balance first.
+     <span class="note">(Paid/closed bills aren't triaged — they're out of pay-runs and the AP report.)</span></p>
 
   <div class="detail-head">
     <h2><a href="{{ url_for('bills.detail', bill_id=bill.qb_bill_id) }}">{{ bill.vendor or bill.qb_bill_id }}</a></h2>

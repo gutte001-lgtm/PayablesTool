@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Spend Summary &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "{:,.2f}".format((c or 0)/100) }}{% endmacro %}
 {% macro pct(p) %}{{ "%.1f"|format(p or 0) }}%{% endmacro %}
 
 {% block content %}
