@@ -104,7 +104,8 @@ Paid-status reconciliation as shipped is **sync-triggered, balance-based, and bi
 > exports and the rollup GL rules engine (GL coding map authored and **25 rules
 > loaded** into `gl_rule`); it did **not** include partial payments or pay-run
 > close-out — those were punted (see the Phase 4 v1 scope note and the Phase 5
-> section). Phases 6 (spend summary) and 8 (hosting) are not started. The GL
+> section). Phase 6 (spend summary) shipped and was redesigned in Phase 4.6;
+> Phase 8 (hosting) is not started. The GL
 > rules engine + `/admin/rules` UI originally scoped as "Phase 7" shipped early
 > as part of Phase 1b (see [`WAREHOUSE_SCHEMA.md`](WAREHOUSE_SCHEMA.md) §4); the
 > GL coding map (`[GL_CODING_MAP]`) is now authored and loaded, so Phase 7 is
