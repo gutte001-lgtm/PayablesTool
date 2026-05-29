@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Triage &middot; PayablesTool{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Triage <span class="note">(AP dueness — pre-go-live)</span></h1>
+
+  {% if not bill %}
+  <p class="ok-big">✓ Nothing left to triage — every bill has a classification decision.</p>
+  <p class="note"><a href="{{ url_for('bills.list_bills') }}">Back to bills</a></p>
+  {% else %}
+  <p class="note">{{ remaining }} open bill(s) left to triage. Biggest open balance first.
+     <span class="note">(Paid/closed bills aren't triaged — they're out of pay-runs and the AP report.)</span></p>
+
+  <div class="detail-head">
+    <h2><a href="{{ url_for('bills.detail', bill_id=bill.qb_bill_id) }}">{{ bill.vendor or bill.qb_bill_id }}</a></h2>
+    <div class="actions">
+      <span class="badge">{{ money(bill.open_balance_cents) }} open</span>
+      <span class="badge">cat: {{ meta.app_category or '—' }}</span>
+    </div>
+  </div>
+
+  <table class="grid kv">
+    <tr><td>Bill #</td><td>{{ bill.bill_number or '—' }}</td>
+        <td>Amount</td><td>{{ money(bill.amount_cents) }}</td></tr>
+    <tr><td>Bill date</td><td>{{ bill.bill_date or '—' }}</td>
+        <td>Open balance</td><td><strong>{{ money(bill.open_balance_cents) }}</strong></td></tr>
+    <tr><td>Due date (QB)</td><td>{{ bill.due_date or '—' }}</td>
+        <td>Credit applied?</td><td>{{ 'yes' if meta.has_credit_applied else 'no' }}</td></tr>
+    <tr><td>Memo</td><td colspan="3" class="memo">{{ bill.qb_memo or '—' }}</td></tr>
+  </table>
+
+  <h3>GL lines</h3>
+  <table class="grid">
+    <tr><th>#</th><th style="text-align:right">Amount</th><th>GL account</th><th>Class</th></tr>
+    {% for l in lines %}
+    <tr><td>{{ l.line_number }}</td>
+        <td style="text-align:right">{{ money(l.line_amount_cents) }}</td>
+        <td>{{ l.gl_account_name or '—' }}</td><td>{{ l.qb_class_name or '—' }}</td></tr>
+    {% else %}<tr><td colspan="4">No lines.</td></tr>{% endfor %}
+  </table>
+
+  <div class="suggestion">
+    <strong>Suggestion:</strong>
+    <span class="badge obl obl-{{ sug_obligation }}">{{ sug_obligation|replace('_',' ') }}</span>
+    <span class="badge due due-{{ sug_due }}">{{ sug_due|replace('_',' ') }}</span>
+    {% if sug_reason %}<span class="badge">{{ sug_reason|replace('_',' ') }}</span>{% endif %}
+    <span class="note">— {{ sug_why }}</span>
+  </div>
+
+  <form method="post" action="{{ url_for('triage.apply', bill_id=bill.qb_bill_id) }}" id="triageform" class="metaform">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fgrid">
+      <label>Obligation type
+        <select name="obligation_type" id="f_obl">
+          {% for o in obligation_types %}<option value="{{ o }}" {{ 'selected' if sug_obligation==o }}>{{ o|replace('_',' ') }}</option>{% endfor %}
+        </select></label>
+      <label>Due state
+        <select name="due_state" id="f_due">
+          {% for d in due_states %}<option value="{{ d }}" {{ 'selected' if sug_due==d }}>{{ d|replace('_',' ') }}</option>{% endfor %}
+        </select></label>
+      <label>Reason
+        <select name="classification_reason" id="f_reason">
+          <option value="">—</option>
+          {% for r in reasons %}<option value="{{ r }}" {{ 'selected' if sug_reason==r }}>{{ r|replace('_',' ') }}</option>{% endfor %}
+        </select></label>
+      <label class="wide">Note
+        <input name="classification_note" placeholder="optional context"></label>
+    </div>
+    <p class="note">Keys: <kbd>a</kbd> accept &amp; next · <kbd>1</kbd> ordinary AP · <kbd>2</kbd> debt service · <kbd>3</kbd> not real AP · <kbd>u</kbd> toggle due · <kbd>Enter</kbd> confirm</p>
+    <button type="submit" id="confirmbtn">Confirm &amp; next</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if bill %}
+<script>
+(function(){
+  var form=document.getElementById('triageform');
+  var obl=document.getElementById('f_obl'), due=document.getElementById('f_due');
+  document.addEventListener('keydown', function(e){
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+    var k=e.key.toLowerCase();
+    if(k==='a'){ e.preventDefault(); form.submit(); }
+    else if(k==='1'){ obl.value='ordinary_ap'; }
+    else if(k==='2'){ obl.value='debt_service'; }
+    else if(k==='3'){ obl.value='not_real_ap'; }
+    else if(k==='u'){ due.value=(due.value==='due'?'not_due':'due'); }
+    else if(k==='enter'){ e.preventDefault(); form.submit(); }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

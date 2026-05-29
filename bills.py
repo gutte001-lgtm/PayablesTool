@@ -41,6 +41,14 @@ CLASSIFICATIONS = ("Real", "Refund-Visibility", "Prepayment-Deposit", "Other")
 CEO_EXCLUDED = ("Refund-Visibility", "Prepayment-Deposit")
 CHANNELS = ("Pur Board", "MS List", "NSPO", "Email", "Other")
 METHODS = ("Check", "Wire", "Credit Card", "ACH")
+# Phase 4.5: the 2-D dueness model. obligation_type is owned by controller+cfo;
+# ap_clerk may flip due_state (the trigger-met flip) but not obligation_type.
+OBLIGATION_TYPES = ("ordinary_ap", "debt_service", "not_real_ap")
+DUE_STATES = ("due", "not_due")
+# audit_log/classification actions surfaced in the bill-detail change history
+CLASSIFICATION_AUDIT_FIELDS = ("obligation_type", "due_state",
+                               "classification_reason", "classification_note",
+                               "expected_payment_date", "invoice_due_date")
 # Fields an ap_clerk must fill before New -> AP_Reviewed (key, human label).
 REQUIRED_FOR_AP = (("classification", "classification"), ("approver_name", "approver"),
                    ("approval_channel", "approval channel"), ("approval_date", "approval date"))
@@ -120,6 +128,16 @@ def _build_filters(args, for_kpi=False):
     state["app_category"] = cat
     if cat:
         conds.append("m.app_category = ?"); params.append(cat)
+
+    obl = args.get("obligation_type", "")
+    state["obligation_type"] = obl
+    if obl in OBLIGATION_TYPES:
+        conds.append("m.obligation_type = ?"); params.append(obl)
+
+    ds = args.get("due_state", "")
+    state["due_state"] = ds
+    if ds in DUE_STATES:
+        conds.append("m.due_state = ?"); params.append(ds)
 
     vendor = args.get("vendor", "")
     state["vendor"] = vendor
@@ -213,7 +231,7 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
                    b.amount_cents, b.open_balance_cents, b.is_paid,
                    m.app_category, m.app_category_breakdown, m.classification,
                    m.approval_state, m.ops_number, m.rush_flag, m.ok_for_ceo,
-                   m.status_pill
+                   m.status_pill, m.obligation_type, m.due_state
             FROM bill b LEFT JOIN bill_metadata m ON m.qb_bill_id=b.qb_bill_id
             WHERE {where}
             ORDER BY {sort_col} {direction}, b.qb_bill_id
@@ -246,7 +264,8 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     # filter-only params (no sort/dir/page) for building sort + pagination links
     fparams = {k: v for k in ("status", "classification", "app_category", "vendor",
-               "approval_state", "ok_for_ceo", "rush", "future", "uncat", "due", "q")
+               "approval_state", "ok_for_ceo", "rush", "future", "uncat", "due", "q",
+               "obligation_type", "due_state")
                for v in [state.get(k)] if v}
     return render_template(
         "bills_list.html",
@@ -256,6 +275,7 @@ def _render_list(args, title=None, base_endpoint="bills.list_bills", locked=None
         jira_base=_jira_base(), locked=locked or {},
         endpoint=base_endpoint, fparams=fparams,
         tagged_bills=tagged_bills or [],
+        obligation_types=OBLIGATION_TYPES, due_states=DUE_STATES,
     )
 
 
@@ -330,6 +350,11 @@ def detail(bill_id):
         "SELECT a.*, u.name AS who FROM audit_log a LEFT JOIN users u ON u.id=a.user_id "
         "WHERE a.entity_id=? AND a.entity_type IN ('bill','bill_metadata') "
         "ORDER BY a.id DESC LIMIT 20", (bill_id,)).fetchall()
+    # Phase 4.5: classification change history (who / when / field / from -> to).
+    class_history = conn.execute(
+        "SELECT c.*, u.name AS who FROM classification_audit c "
+        "LEFT JOIN users u ON u.id=c.changed_by "
+        "WHERE c.bill_id=? ORDER BY c.id DESC LIMIT 20", (bill_id,)).fetchall()
     breakdown = []
     if meta and meta["app_category_breakdown"]:
         try:
@@ -356,6 +381,12 @@ def detail(bill_id):
         active_tags=tags.active_tags_for_bill(conn, bill_id),
         taggable_users=tags.active_users_excluding(conn, current_user.id),
         open_items=tags.open_items_for_bill(conn, bill_id),
+        # Phase 4.5 classification panel
+        obligation_types=OBLIGATION_TYPES, due_states=DUE_STATES,
+        reasons=tags.classification_reasons(conn),
+        class_history=class_history,
+        can_classify=current_user.has_role("ap_clerk", "controller", "cfo"),
+        can_edit_obligation=current_user.has_role("controller", "cfo"),
     )
 
 
@@ -443,6 +474,102 @@ def save_metadata(bill_id):
         sync.recompute_for_bill(conn, bill_id)   # override wins / reverts
     conn.commit()
     flash("Saved." + (" Category recomputed." if manual_changed else ""), "ok")
+    return redirect(url_for("bills.detail", bill_id=bill_id))
+
+
+@bp.route("/bills/<bill_id>/classify", methods=["POST"])
+@role_required("ap_clerk", "controller", "cfo")
+def classify(bill_id):
+    """Phase 4.5 classification save: obligation_type x due_state +
+    expected_payment_date + reason/note. Separate from save_metadata so the
+    role gate (controller+cfo own obligation_type; ap_clerk may flip due_state)
+    and the reason-required validation stay isolated, and the audit trail is
+    specific. invoice_due_date is QB-locked: never read from the form. Every
+    changed field writes a classification_audit row (changed_by=current user)."""
+    conn = db.get_db()
+    old = conn.execute("SELECT * FROM bill_metadata WHERE qb_bill_id=?",
+                       (bill_id,)).fetchone()
+    if not old:
+        abort(404)
+    f = request.form
+    is_owner = current_user.has_role("controller", "cfo")
+
+    # --- obligation_type (controller+cfo only) ---
+    posted_obl = (f.get("obligation_type") or "").strip()
+    if posted_obl and posted_obl not in OBLIGATION_TYPES:
+        flash("Invalid obligation type.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    new_obl = posted_obl or old["obligation_type"]
+    if new_obl != old["obligation_type"] and not is_owner:
+        # ap_clerk cannot change obligation_type (server-side gate, not just UI)
+        flash("Only the controller or CFO can change the obligation type.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+
+    # --- due_state (ap_clerk + controller + cfo) ---
+    posted_due = (f.get("due_state") or "").strip()
+    if posted_due and posted_due not in DUE_STATES:
+        flash("Invalid due state.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+    new_due = posted_due or old["due_state"]
+
+    # Rule 1: not_real_ap is the impossible-cell guard -> force not_due.
+    coerced = False
+    if new_obl == "not_real_ap" and new_due == "due":
+        new_due = "not_due"
+        coerced = True
+
+    # --- expected_payment_date (editable; reject non-dates) ---
+    try:
+        new_epd = _valid_date(f.get("expected_payment_date"))
+    except ValueError as e:
+        flash(str(e), "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+
+    # --- reason + note ---
+    new_reason = (f.get("classification_reason") or "").strip() or None
+    new_note = (f.get("classification_note") or "").strip() or None
+    if new_reason and not tags.reason_exists(conn, new_reason):
+        flash("Unknown classification reason — add it to the list first.", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+
+    # Rule 2: a non-default classification (obligation_type != ordinary_ap, or a
+    # manual flip to due) requires a reason from the lookup.
+    differs_from_default = (new_obl != "ordinary_ap") or (new_due == "due")
+    if differs_from_default and not new_reason:
+        flash("A classification reason is required when the classification "
+              "differs from the default (ordinary AP, not due).", "error")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+
+    # Diff the five editable fields; invoice_due_date is intentionally excluded.
+    proposed = {
+        "obligation_type": new_obl,
+        "due_state": new_due,
+        "classification_reason": new_reason,
+        "classification_note": new_note,
+        "expected_payment_date": new_epd,
+    }
+    changed = {k: v for k, v in proposed.items()
+               if (old[k] if old[k] != "" else None) != v}
+    if not changed:
+        flash("No classification changes." + (" (not_real_ap forced not due.)"
+              if coerced else ""), "ok")
+        return redirect(url_for("bills.detail", bill_id=bill_id))
+
+    now = sync._now_iso()
+    sets = ", ".join(f"{k}=?" for k in changed)
+    params = [changed[k] for k in changed]
+    conn.execute(
+        f"UPDATE bill_metadata SET {sets}, classified_by=?, classified_at=?, "
+        "updated_at=? WHERE qb_bill_id=?",
+        (*params, current_user.id, now, now, bill_id))
+    for field, to_val in changed.items():
+        sync.log_classification_change(conn, bill_id, field, old[field], to_val,
+                                       current_user.id, now)
+    conn.commit()
+    msg = "Classification saved."
+    if coerced:
+        msg += " not_real_ap can't be due — due state forced to not due."
+    flash(msg, "ok")
     return redirect(url_for("bills.detail", bill_id=bill_id))
 
 

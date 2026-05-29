@@ -91,8 +91,12 @@ def seed_bill(bid, state="Controller_Reviewed", classification=None,
                "VALUES (?,?,?,?,?,?,?,?,?)",
                (bid, "Acme " + bid, "B-" + bid, open_balance, open_balance,
                 "2026-05-01", "2026-05-15", 0 if open_balance > 0 else 1, "2026-05-22"))
+    # Phase 4.5 added a hard pay-run fence (due_state='due' AND obligation_type
+    # IN ordinary_ap/debt_service). These Phase 4 pay-run tests assume the bill
+    # is eligible, so seed it 'due' (obligation_type defaults to 'ordinary_ap').
     cn.execute("INSERT INTO bill_metadata (qb_bill_id,approval_state,classification,"
-               "proposed_payment_method,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+               "proposed_payment_method,due_state,created_at,updated_at) "
+               "VALUES (?,?,?,?,'due',?,?)",
                (bid, state, classification, proposed_method, "2026-05-01", "2026-05-01"))
     cn.commit()
     cn.close()

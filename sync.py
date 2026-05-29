@@ -110,6 +110,79 @@ def _now_iso():
 
 
 # ----------------------------------------------------------------------
+# Phase 4.5 -- debt-service detection (liability accounts)
+# ----------------------------------------------------------------------
+
+# A bill is debt service when ANY of its lines reduces a known liability
+# account. Decathlon's note -- GL 26110, "NOTES PAYABLE:Decathlon Alpha IV,
+# L.P." -- is the one confirmed liability account in the warehouse (the sole
+# NOTES PAYABLE account, and Decathlon-exclusive). Detection runs ONLY on first
+# sight (the metadata-create branch), so a human override of obligation_type is
+# never re-derived by a later sync. EDIT POINT: add other liability GL account
+# numbers here as loans/financed obligations are identified during triage.
+# Matched on the canonical account number (reliable for liability lines, which
+# -- unlike many COGS lines -- carry a parsed number too) with a fallback to the
+# leading-digit parse.
+LIABILITY_ACCOUNT_NUMBERS = frozenset({"26110"})
+
+
+def is_liability_account_line(line):
+    """True if a bill_line dict hits a known debt-service liability account."""
+    canon = (line.get("gl_account_number_canonical") or "").strip()
+    parsed = (line.get("gl_account_number") or "").strip()
+    return canon in LIABILITY_ACCOUNT_NUMBERS or parsed in LIABILITY_ACCOUNT_NUMBERS
+
+
+def bill_reduces_liability(lines):
+    """True if ANY line on the bill reduces a known liability account
+    (-> default obligation_type='debt_service' on first sight)."""
+    return any(is_liability_account_line(ln) for ln in lines)
+
+
+def log_classification_change(conn, bill_id, field, from_value, to_value,
+                              changed_by, now):
+    """Append a row to classification_audit (the Phase 4.5 change trail). Every
+    classification field change and every sync-driven invoice_due_date update
+    goes here. changed_by=None denotes a system/sync-driven change."""
+    conn.execute(
+        "INSERT INTO classification_audit (bill_id, field, from_value, "
+        "to_value, changed_by, changed_at) VALUES (?,?,?,?,?,?)",
+        (str(bill_id), field,
+         None if from_value is None else str(from_value),
+         None if to_value is None else str(to_value),
+         changed_by, now))
+
+
+def promote_debt_service_due(conn, today, now):
+    """Auto-promote debt_service bills not_due -> due once their contractual
+    invoice_due_date has arrived. Zero-tolerance for lateness: the obligation
+    was decided when the loan was signed. ordinary_ap is NEVER promoted on date
+    (a human flips it) -- that asymmetry is the phase's key safety gate.
+
+    Runs once per sync pass (covers both the scheduled 15-min job and a manual
+    "Pull Now"). Deterministic + idempotent: the due_state='not_due' guard means
+    a re-run neither re-promotes nor re-audits an already-due bill. Operates on
+    the local bill_metadata directly, so it catches every debt_service bill, not
+    only those pulled this run. Returns the count promoted."""
+    rows = conn.execute(
+        "SELECT qb_bill_id FROM bill_metadata "
+        "WHERE obligation_type='debt_service' AND due_state='not_due' "
+        "AND invoice_due_date IS NOT NULL AND invoice_due_date <= ?",
+        (today,)).fetchall()
+    promoted = [r["qb_bill_id"] for r in rows]
+    if promoted:
+        conn.execute(
+            "UPDATE bill_metadata SET due_state='due', classified_by=NULL, "
+            "classified_at=? WHERE obligation_type='debt_service' "
+            "AND due_state='not_due' AND invoice_due_date IS NOT NULL "
+            "AND invoice_due_date <= ?", (now, today))
+        for bid in promoted:
+            log_classification_change(conn, bid, "due_state", "not_due", "due",
+                                      None, now)
+    return len(promoted)
+
+
+# ----------------------------------------------------------------------
 # Rules evaluation (pure)
 # ----------------------------------------------------------------------
 
@@ -467,26 +540,68 @@ def _replace_lines(conn, bill_id, lines):
         )
 
 
-def _ensure_metadata(conn, bill_id, ops_primary, ops_all, has_credit, now):
+def _ensure_metadata(conn, bill_id, ops_primary, ops_all, has_credit, now,
+                     invoice_due_date=None, is_debt_service=False):
     """Create metadata for a new bill; else refresh derived-only fields.
-    Never touches user-entered fields. Returns True if created."""
+    Never touches user-entered fields.
+
+    Phase 4.5:
+      - First sight: snapshot invoice_due_date (QB-locked) and default
+        expected_payment_date to it; if the bill reduces a known liability
+        account, default obligation_type='debt_service' / reason='debt_service'
+        (audited). The NOT-NULL column defaults already set ordinary_ap/not_due.
+      - Later syncs: invoice_due_date is updated ONLY here (from QB), never from
+        a team edit; any change is written to classification_audit.
+
+    Returns (created, debt_service_detected, invoice_due_date_changed)."""
     exists = conn.execute(
-        "SELECT 1 FROM bill_metadata WHERE qb_bill_id = ?", (bill_id,)
-    ).fetchone()
+        "SELECT invoice_due_date FROM bill_metadata WHERE qb_bill_id = ?",
+        (bill_id,)).fetchone()
     if exists:
         conn.execute(
             "UPDATE bill_metadata SET ops_number=?, ops_numbers_all=?, "
             "has_credit_applied=?, updated_at=? WHERE qb_bill_id=?",
             (ops_primary, ops_all, 1 if has_credit else 0, now, bill_id),
         )
-        return False
+        old_idd = exists["invoice_due_date"]
+        idd_changed = False
+        if invoice_due_date != old_idd:
+            # QB-locked contractual date: reflect a vendor-revised term (or the
+            # first post-migration capture), audited; team edits can never reach
+            # this column (no form path writes it).
+            conn.execute(
+                "UPDATE bill_metadata SET invoice_due_date=?, updated_at=? "
+                "WHERE qb_bill_id=?", (invoice_due_date, now, bill_id))
+            log_classification_change(conn, bill_id, "invoice_due_date",
+                                      old_idd, invoice_due_date, None, now)
+            idd_changed = True
+        return False, False, idd_changed
+
+    if is_debt_service:
+        conn.execute(
+            "INSERT INTO bill_metadata (qb_bill_id, ops_number, ops_numbers_all, "
+            "has_credit_applied, approval_state, invoice_due_date, "
+            "expected_payment_date, obligation_type, due_state, "
+            "classification_reason, classified_at, created_at, updated_at) "
+            "VALUES (?,?,?,?, 'New', ?, ?, 'debt_service', 'not_due', "
+            "'debt_service', ?, ?, ?)",
+            (bill_id, ops_primary, ops_all, 1 if has_credit else 0,
+             invoice_due_date, invoice_due_date, now, now, now))
+        log_classification_change(conn, bill_id, "obligation_type",
+                                  "ordinary_ap", "debt_service", None, now)
+        log_classification_change(conn, bill_id, "classification_reason",
+                                  None, "debt_service", None, now)
+        return True, True, False
+
     conn.execute(
         "INSERT INTO bill_metadata (qb_bill_id, ops_number, ops_numbers_all, "
-        "has_credit_applied, approval_state, created_at, updated_at) "
-        "VALUES (?,?,?,?, 'New', ?, ?)",
-        (bill_id, ops_primary, ops_all, 1 if has_credit else 0, now, now),
+        "has_credit_applied, approval_state, invoice_due_date, "
+        "expected_payment_date, created_at, updated_at) "
+        "VALUES (?,?,?,?, 'New', ?, ?, ?, ?)",
+        (bill_id, ops_primary, ops_all, 1 if has_credit else 0,
+         invoice_due_date, invoice_due_date, now, now),
     )
-    return True
+    return True, False, False
 
 
 def _store_category(conn, bill_id, category, source, breakdown, now):
@@ -513,6 +628,8 @@ def run_sync(trigger="scheduled", user_id=None):
         "marked_paid": 0, "lines_upserted": 0, "date_parse_warnings": 0,
         "ops_jira_mismatch_warnings": 0, "errors": 0,
         "open_bill_count": 0, "open_ap_total_cents": 0,
+        "debt_service_detected": 0, "invoice_due_date_synced": 0,
+        "debt_service_promoted": 0,
     }
     az = None
     conn = None
@@ -579,8 +696,10 @@ def run_sync(trigger="scheduled", user_id=None):
 
                 op, prev_open = _upsert_bill(conn, brow, now)
                 _replace_lines(conn, bid, lines)
-                created = _ensure_metadata(conn, bid, ops_primary, ops_all,
-                                           has_credit, now)
+                is_debt = bill_reduces_liability(lines)
+                created, debt_detected, idd_changed = _ensure_metadata(
+                    conn, bid, ops_primary, ops_all, has_credit, now,
+                    invoice_due_date=ddate, is_debt_service=is_debt)
                 # category respects an existing manual override
                 man = conn.execute(
                     "SELECT app_category_manual FROM bill_metadata WHERE qb_bill_id=?",
@@ -605,6 +724,10 @@ def run_sync(trigger="scheduled", user_id=None):
                 counts["lines_upserted"] += len(lines)
                 if created:
                     counts["metadata_created"] += 1
+                if debt_detected:
+                    counts["debt_service_detected"] += 1
+                if idd_changed:
+                    counts["invoice_due_date_synced"] += 1
                 if date_warn:
                     counts["date_parse_warnings"] += 1
                 if prev_open is not None and prev_open > 0 and open_cents == 0:
@@ -618,6 +741,14 @@ def run_sync(trigger="scheduled", user_id=None):
                     conn.commit()
                 except Exception:
                     conn.rollback()
+
+        # Phase 4.5: auto-promote debt_service not_due -> due on invoice_due_date.
+        # Runs once per pass over the local mirror (covers scheduled + manual),
+        # so it catches every debt_service bill regardless of which were pulled.
+        promo_now = _now_iso()
+        counts["debt_service_promoted"] = promote_debt_service_due(
+            conn, date.today().isoformat(), promo_now)
+        conn.commit()
 
         cnt, total_cents = ap_tie_out(cur)
         counts["open_bill_count"] = cnt

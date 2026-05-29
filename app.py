@@ -27,6 +27,7 @@ from exports import init_exports
 from followup import init_followup
 from payruns import init_payruns
 from summary import init_summary
+from triage import init_triage
 from warehouse import health_check
 
 # Read .env DIRECTLY from the file (not via load_dotenv + os.environ). This
@@ -57,6 +58,18 @@ init_followup(app)
 init_payruns(app)
 init_exports(app)
 init_summary(app)
+init_triage(app)
+
+
+def _money(cents):
+    """Render integer cents as grouped USD: 31475000 -> '$314,750.00'.
+    Registered as the Jinja global `money` and used by every template, so the
+    display format is single-sourced and can't drift per page. cents->dollars
+    conversion is unchanged; this only adds thousands separators."""
+    return "${:,.2f}".format((cents or 0) / 100)
+
+
+app.jinja_env.globals["money"] = _money
 
 
 @app.context_processor

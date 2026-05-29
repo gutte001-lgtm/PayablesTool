@@ -136,9 +136,12 @@ def rules():
                      "FROM bill_line WHERE gl_account_name IS NOT NULL "
                      "GROUP BY gl_account_name ORDER BY line_count DESC LIMIT 100")
     uncat = db.q1("SELECT COUNT(*) AS n FROM bill_metadata WHERE app_category='Uncategorized'")
+    reasons = db.qa("SELECT value, is_seed FROM classification_reason_lookup "
+                    "ORDER BY is_seed DESC, value")
     return render_template("admin_rules.html",
                            gl_rules=gl_rules, vendor_defaults=vendor_defaults,
                            coverage=coverage, uncat=uncat,
+                           classification_reasons=reasons,
                            can_edit=current_user.has_role("controller"))
 
 
@@ -269,6 +272,34 @@ def status_pills_add():
                    "status_pill_added", None, {"value": value})
     conn.commit()
     flash(f"Added status pill “{value}”.", "ok")
+    return redirect(back)
+
+
+@bp.route("/classification-reasons/add", methods=["POST"])
+@role_required("controller")
+def classification_reasons_add():
+    """Add a new classification-reason value to the lookup (Phase 4.5).
+    Controller-only: reasons are a classification vocabulary owned by Joe/CFO
+    (slightly tighter than status pills, which allow ap_clerk). Triggered from
+    the inline "+ Add new…" affordance on the bill-detail classify panel, so we
+    redirect back to wherever it was submitted from. Trim + non-empty +
+    case-insensitive uniqueness enforced."""
+    value = (request.form.get("value") or "").strip()
+    back = request.referrer or url_for("admin.rules")
+    if not value:
+        flash("Classification reason can't be empty.", "error")
+        return redirect(back)
+    conn = db.get_db()
+    if tags.reason_exists_ci(conn, value):
+        flash(f"“{value}” is already a classification reason.", "error")
+        return redirect(back)
+    conn.execute(
+        "INSERT INTO classification_reason_lookup (value, created_by, created_at, "
+        "is_seed) VALUES (?,?,?,0)", (value, current_user.id, sync._now_iso()))
+    sync.log_audit(conn, current_user.id, "classification_reason_lookup", value,
+                   "classification_reason_added", None, {"value": value})
+    conn.commit()
+    flash(f"Added classification reason “{value}”.", "ok")
     return redirect(back)
 
 

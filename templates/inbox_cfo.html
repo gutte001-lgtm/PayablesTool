@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}CFO Inbox &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 {% block content %}
 <div class="card">
   <h1>CFO Inbox <span class="count">({{ runs|length }})</span></h1>

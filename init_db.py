@@ -135,6 +135,17 @@ CREATE TABLE IF NOT EXISTS bill_metadata (
     partial_payment_flag    INTEGER NOT NULL DEFAULT 0,
     status_pill             TEXT,        -- Phase 3.5; FK-ish to status_pill_lookup.value
                                          -- (enforced in app code, not DB), nullable = no pill
+    -- Phase 4.5: 2-D AP dueness classification (obligation_type x due_state).
+    invoice_due_date        TEXT,        -- contractual due date from QB, locked from team edits
+    expected_payment_date   TEXT,        -- editable CFO cash-forecast date; defaults to invoice_due_date
+    obligation_type         TEXT NOT NULL DEFAULT 'ordinary_ap'
+        CHECK (obligation_type IN ('ordinary_ap','debt_service','not_real_ap')),
+    due_state               TEXT NOT NULL DEFAULT 'not_due'
+        CHECK (due_state IN ('due','not_due')),
+    classification_reason   TEXT,        -- FK-ish to classification_reason_lookup.value (app-enforced)
+    classification_note     TEXT,        -- free-text context (metadata field, not an append-only note)
+    classified_by           INTEGER REFERENCES users(id),  -- last actor to change a classification field
+    classified_at           TEXT,        -- timestamp of last classification change
     created_at              TEXT NOT NULL,
     updated_at             TEXT NOT NULL
 );
@@ -298,8 +309,51 @@ CREATE INDEX IF NOT EXISTS idx_openitem_open ON bill_open_item(resolved_at, crea
 
 SCHEMA = SCHEMA + PHASE_3_6_SCHEMA
 
+# ===== Phase 4.5 -- AP dueness classification (2-D obligation x due-state) ===
+# The eight new bill_metadata columns live inside CREATE TABLE bill_metadata
+# above (so fresh DBs get them natively); migrations/006_phase_4_5.py ALTER-adds
+# them to the live DB. This constant owns the parts that are cleanly
+# IF NOT EXISTS-able and reusable by the migration: the extensible reason lookup
+# (mirrors status_pill_lookup), the classification_audit trail table, and the
+# two bill_metadata indexes (created after the columns exist on both paths).
+PHASE_4_5_SCHEMA = """
+CREATE TABLE IF NOT EXISTS classification_reason_lookup (
+    value      TEXT PRIMARY KEY,
+    created_by INTEGER REFERENCES users(id),  -- NULL for seed reasons
+    created_at TEXT,
+    is_seed    INTEGER NOT NULL DEFAULT 0     -- 1 = shipped seed, 0 = user-added
+);
+
+-- Append-only-in-practice classification change trail. One row per changed
+-- field per submit, written by both the classify route (changed_by=user) and
+-- sync (changed_by NULL = system: invoice_due_date sync, debt-service auto-
+-- detection, due_state auto-promotion). The bill-detail change-history panel
+-- reads from here. bill_id holds the qb_bill_id value.
+CREATE TABLE IF NOT EXISTS classification_audit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    bill_id     TEXT NOT NULL REFERENCES bill(qb_bill_id),
+    field       TEXT NOT NULL,
+    from_value  TEXT,
+    to_value    TEXT,
+    changed_by  INTEGER REFERENCES users(id),  -- NULL = system/sync
+    changed_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_classaudit_bill ON classification_audit(bill_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_meta_obligation ON bill_metadata(obligation_type);
+CREATE INDEX IF NOT EXISTS idx_meta_duestate   ON bill_metadata(due_state);
+"""
+
+SCHEMA = SCHEMA + PHASE_4_5_SCHEMA
+
 # Seed status pills (is_seed=1). Shared by init_db (fresh DB) and the migration.
 SEED_PILLS = ("Waiting on Vendor", "Waiting on Approver", "In Review", "Blocked")
+
+# Seed classification reasons (is_seed=1). Shared by init_db + migration 006.
+SEED_CLASSIFICATION_REASONS = (
+    "deposit", "placeholder", "disputed", "waiting_on_service",
+    "waiting_on_inventory", "waiting_on_device_ship", "debt_service", "other",
+)
 
 
 def create_schema(conn) -> None:
@@ -316,6 +370,24 @@ def seed_status_pills(conn) -> list:
     for value in SEED_PILLS:
         cur = conn.execute(
             "INSERT OR IGNORE INTO status_pill_lookup "
+            "(value, created_by, created_at, is_seed) VALUES (?, NULL, ?, 1)",
+            (value, now),
+        )
+        if cur.rowcount:
+            created.append(value)
+    conn.commit()
+    return created
+
+
+def seed_classification_reasons(conn) -> list:
+    """Insert any missing seed classification reasons (is_seed=1). Idempotent
+    (value is PK). Returns the list of reason values created this run."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(sep=" ", timespec="seconds")
+    created = []
+    for value in SEED_CLASSIFICATION_REASONS:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO classification_reason_lookup "
             "(value, created_by, created_at, is_seed) VALUES (?, NULL, ?, 1)",
             (value, now),
         )
@@ -366,6 +438,7 @@ def init() -> None:
         create_schema(conn)
         created = seed_users(conn)
         pills_created = seed_status_pills(conn)
+        reasons_created = seed_classification_reasons(conn)
         rows = conn.execute(
             "SELECT username, role, is_active FROM users ORDER BY id"
         ).fetchall()
@@ -380,6 +453,7 @@ def init() -> None:
     print(f"tables: {tables}")
     print(f"seeded this run: {created or 'none (all already present)'}")
     print(f"status pills seeded this run: {pills_created or 'none (all already present)'}")
+    print(f"classification reasons seeded this run: {reasons_created or 'none (all already present)'}")
     print("users:")
     for r in rows:
         state = "active" if r["is_active"] else "inactive (no login v1)"

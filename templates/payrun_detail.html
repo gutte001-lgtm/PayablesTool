@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ run.name }} &middot; PayablesTool{% endblock %}
-{% macro money(c) %}${{ "%.2f"|format((c or 0)/100) }}{% endmacro %}
 
 {# One pay-run line as a <tr> with 6 columns: Vendor | Bill # | Due | Method | Amount | Status/actions #}
 {% macro linerow(ln, is_draft, can_edit, can_review, run_id, methods) %}

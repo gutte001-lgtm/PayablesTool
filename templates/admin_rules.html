@@ -94,6 +94,26 @@
   </form>
   {% endif %}
 
+  <h2>Classification reasons (Phase 4.5)</h2>
+  <p class="note">The reason dropdown on each bill's classification panel.
+     Seeds ship with the app; the controller can add more.</p>
+  <table class="grid">
+    <tr><th>Reason</th><th>Source</th></tr>
+    {% for r in classification_reasons %}
+    <tr><td>{{ r.value|replace('_',' ') }}</td>
+        <td>{{ 'seed' if r.is_seed else 'added' }}</td></tr>
+    {% else %}
+    <tr><td colspan="2">No reasons yet.</td></tr>
+    {% endfor %}
+  </table>
+  {% if can_edit %}
+  <form method="post" action="{{ url_for('admin.classification_reasons_add') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="value" placeholder="new reason (e.g. awaiting_credit)" maxlength="40" required>
+    <button type="submit">Add reason</button>
+  </form>
+  {% endif %}
+
   <h2>GL accounts seen on synced bills (rule-authoring helper)</h2>
   <p class="note">Top accounts by line count across stored bills — target your
      rules at what actually appears.</p>
